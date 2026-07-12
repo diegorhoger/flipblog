@@ -1,0 +1,101 @@
+:root{
+    --cor-primaria: #FFF200;
+    --cor-secundaria: #fff86e;
+    --cor-fundo: white;
+    --cor-texto: #000000;
+    --cor-contraste: #000000;
+    --cor-botão: white;
+    
+    --fonte-texto: 'Gill Sans', sans-serif;
+}
+
+*{
+    transition: background-color 0.8s ease;
+}
+
+.tema-escuro{
+     --cor-primaria: #000759;
+    --cor-secundaria: #5a51ff;
+    --cor-fundo: #0f0070;
+    --cor-texto: white;
+    --cor-contraste: white;
+    --cor-botão: white;
+}
+
+.tema-escuro a {
+    color: var(--cor-secundaria);
+}
+
+.tema-escuro p {
+    color: var(--cor-texto);
+}
+
+.tema-escuro header p {
+    color: var(--cor-contraste);
+}
+
+.tema-escuro .btn-tema-escuro {
+    background-color: var(--cor-secundaria);
+}
+
+body{
+    max-width: 100vw;
+    font-family: var(--fonte-texto);
+}
+
+
+header {
+background-color: var(--cor-primaria);
+color: var(--cor-contraste);
+    text-align: center;
+    margin: 0 auto;
+    padding: 16px;
+    border: 5px solid black;
+}
+
+main {
+    background-color: var(--cor-fundo);
+    color: var(--cor-texto);
+    margin: 0 auto;
+    padding: 16px;
+    display: flex;
+
+    display: flex;
+    flex-wrap: wrap;
+}
+
+article{
+    display: flex;
+
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+
+    margin: 16px;
+    gap: 16px;
+    padding: 16px;
+
+    flex: 1 1 25%;
+
+        flex-direction: column;
+    align-items: center;
+    text-align: center;
+    justify-items: center;
+}
+
+img {
+    width: 80px;
+    height: 80px;
+}
+
+.artigo-autor {
+    font-weight: bold;
+}
+
+.btn-tema-escuro{
+    position: fixed;
+    bottom: 16px;
+    right: 16px;
+    font-size: 32px;
+    padding: 12px;
+    background-color: var(--cor-primaria);
+    border-radius: 30%;
+}

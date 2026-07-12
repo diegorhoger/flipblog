@@ -1,0 +1,23 @@
+{
+  "name": "flipblog-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "node scripts/lint.js"
+  },
+  "dependencies": {
+    "page-flip": "^2.0.7",
+    "quill": "2.0.2"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.1",
+    "vite": "^6.0.7",
+    "vitest": "^2.1.8"
+  }
+}

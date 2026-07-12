@@ -1,0 +1,27 @@
+{
+  "name": "flipblog",
+  "version": "1.0.0",
+  "private": true,
+  "description": "FlipBlog — a flippable, book-style blog publishing platform with an admin dashboard.",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm run dev --workspace flipblog-server",
+    "dev:web": "npm run dev --workspace flipblog-web",
+    "build": "npm run build --workspace flipblog-web",
+    "start": "npm run start --workspace flipblog-server",
+    "test": "npm run test --workspace flipblog-server && npm run test --workspace flipblog-web",
+    "test:e2e": "npm run build && node -e \"require('fs').rmSync('server/data',{recursive:true,force:true})\" && playwright test",
+    "lint": "npm run lint --workspace flipblog-server && npm run lint --workspace flipblog-web"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "concurrently": "^9.1.2"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

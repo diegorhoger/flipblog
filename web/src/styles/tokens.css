@@ -1,0 +1,40 @@
+:root {
+  --cor-primaria: #fff200;
+  --cor-primaria-hover: #ffe600;
+  --cor-secundaria: #ffd400;
+  --cor-fundo: #f6f7f9;
+  --cor-superficie: #ffffff;
+  --cor-texto: #14181f;
+  --cor-texto-suave: #5a6472;
+  --cor-contraste: #14181f;
+  --cor-borda: #e4e7ec;
+  --cor-botao: #14181f;
+  --cor-botao-texto: #ffffff;
+  --cor-perigo: #d92d20;
+  --cor-sucesso: #067647;
+  --sombra: 0 1px 2px rgba(16, 24, 40, 0.06), 0 8px 24px rgba(16, 24, 40, 0.08);
+  --sombra-hover: 0 4px 10px rgba(16, 24, 40, 0.1), 0 16px 40px rgba(16, 24, 40, 0.14);
+  --raio: 14px;
+  --raio-sm: 8px;
+  --fonte-texto: 'Gill Sans', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --largura-max: 1100px;
+  --transicao: 0.25s ease;
+}
+
+.tema-escuro {
+  --cor-primaria: #f5c518;
+  --cor-primaria-hover: #ffd84d;
+  --cor-secundaria: #5a51ff;
+  --cor-fundo: #0c0f17;
+  --cor-superficie: #151a24;
+  --cor-texto: #eef1f6;
+  --cor-texto-suave: #9aa4b2;
+  --cor-contraste: #ffffff;
+  --cor-borda: #2a3140;
+  --cor-botao: #f5c518;
+  --cor-botao-texto: #14181f;
+  --cor-perigo: #f97066;
+  --cor-sucesso: #4cd29a;
+  --sombra: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.5);
+  --sombra-hover: 0 4px 10px rgba(0, 0, 0, 0.5), 0 16px 40px rgba(0, 0, 0, 0.6);
+}

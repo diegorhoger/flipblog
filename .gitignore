@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# Build output (front-end is built into server/public)
+server/public/
+
+# Runtime data & uploaded media
+server/data/
+server/public/uploads/
+
+# Environment
+.env
+.env.local
+*.local
+
+# Logs
+npm-debug.log*
+*.log
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Test artifacts
+coverage/
+playwright-report/
+test-results/
