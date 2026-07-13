@@ -1,8 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
+// Stable anchor for all runtime storage paths. Resolving relative env paths
+// from here (never from process.cwd()) keeps uploads, public assets and the
+// database in the same place regardless of the directory the server is launched
+// from — otherwise tools like multer resolve relative paths against cwd and can
+// scatter files into nested directories (e.g. server/server/public/uploads).
+const serverRoot = dirname(here);
 
 // Tolerant .env loader (no external dependency). Explicit process.env wins.
 function loadEnvFile(p) {
@@ -21,6 +27,7 @@ function loadEnvFile(p) {
       ) {
         val = val.slice(1, -1);
       }
+      val = val.trim();
       if (!(key in process.env)) process.env[key] = val;
     }
   } catch {
@@ -31,9 +38,10 @@ function loadEnvFile(p) {
 loadEnvFile(join(here, '..', '.env'));
 loadEnvFile(join(here, '.env'));
 
+// Relative env values resolve from serverRoot; absolute values are used as-is.
 function resolvePath(value, fallback) {
   if (!value) return fallback;
-  return isAbsolute(value) ? value : join(here, '..', value);
+  return isAbsolute(value) ? value : resolve(serverRoot, value);
 }
 
 export const config = {
@@ -42,9 +50,11 @@ export const config = {
   appSecret: process.env.APP_SECRET || 'dev-insecure-secret-change-me',
   adminUser: process.env.ADMIN_USER || 'admin',
   adminPassword: process.env.ADMIN_PASSWORD || 'changeme',
-  dbPath: process.env.DB_PATH || join(here, '..', 'data', 'flipblog.db'),
-  publicDir: resolvePath(process.env.PUBLIC_DIR, join(here, '..', 'public')),
-  uploadsDir: resolvePath(process.env.UPLOADS_DIR, join(here, '..', 'public', 'uploads')),
+  dbPath: (process.env.DB_PATH?.trim() === ':memory:')
+    ? ':memory:'
+    : resolvePath(process.env.DB_PATH, join(serverRoot, 'data', 'flipblog.db')),
+  publicDir: resolvePath(process.env.PUBLIC_DIR?.trim(), join(serverRoot, 'public')),
+  uploadsDir: resolvePath(process.env.UPLOADS_DIR?.trim(), join(serverRoot, 'public', 'uploads')),
   uploadsUrl: process.env.UPLOADS_URL || '/uploads',
   maxUploadBytes: 5 * 1024 * 1024,
   cookieName: 'fb_session',

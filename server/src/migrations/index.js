@@ -1,0 +1,58 @@
+import migration001 from './001_add_role.js';
+import migration002 from './002_add_avatar.js';
+
+// Ordered migration registry. Add new migrations here in ascending version
+// order. Imports are static (not dynamic) so migrations run synchronously —
+// node:sqlite is synchronous and getDb() must return a fully-migrated schema.
+const MIGRATIONS = [migration001, migration002].sort((a, b) => a.version - b.version);
+
+function ensureMigrationsTable(db) {
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS schema_migrations (
+      version   INTEGER PRIMARY KEY,
+      name      TEXT NOT NULL,
+      applied_at TEXT NOT NULL
+    )`
+  );
+}
+
+function appliedVersions(db) {
+  return new Set(db.prepare('SELECT version FROM schema_migrations').all().map((r) => r.version));
+}
+
+function validateUniqueVersions(migrations) {
+  const seen = new Set();
+  for (const m of migrations) {
+    if (seen.has(m.version)) {
+      throw new Error(`Duplicate migration version: ${m.version} (${m.name})`);
+    }
+    seen.add(m.version);
+  }
+}
+
+// Runs every pending migration inside a single transaction so a failure rolls
+// back cleanly instead of leaving a half-applied schema. Migrations are applied
+// in version order; already-applied versions are skipped. Any error is thrown
+// so the caller fails closed (the app must not serve requests on a broken
+// schema).
+export function runMigrations(db) {
+  validateUniqueVersions(MIGRATIONS);
+  ensureMigrationsTable(db);
+  const applied = appliedVersions(db);
+  const pending = MIGRATIONS.filter((m) => !applied.has(m.version));
+  if (pending.length === 0) return;
+
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const m of pending) {
+      m.up(db);
+      db.prepare(
+        'INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)'
+      ).run(m.version, m.name, new Date().toISOString());
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
