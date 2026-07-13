@@ -28,7 +28,13 @@ test('storage paths are independent of the launch working directory', () => {
 });
 
 test('absolute env paths are used as-is regardless of cwd', () => {
-  const env = { UPLOADS_DIR: 'C:\\absolute\\uploads', DB_PATH: 'C:\\absolute\\db.sqlite' };
+  // Use a path that is absolute on the current platform (the resolver relies on
+  // path.isAbsolute, which is OS-specific). A hardcoded Windows drive letter is
+  // not absolute on POSIX runners, so the path would be wrongly joined to the
+  // server root there.
+  const absUploads = process.platform === 'win32' ? 'C:\\absolute\\uploads' : '/absolute/uploads';
+  const absDb = process.platform === 'win32' ? 'C:\\absolute\\db.sqlite' : '/absolute/db.sqlite';
+  const env = { UPLOADS_DIR: absUploads, DB_PATH: absDb };
   const original = process.cwd();
   let resolved;
   try {
@@ -37,6 +43,6 @@ test('absolute env paths are used as-is regardless of cwd', () => {
   } finally {
     process.chdir(original);
   }
-  assert.equal(resolved.uploadsDir, 'C:\\absolute\\uploads');
-  assert.equal(resolved.dbPath, 'C:\\absolute\\db.sqlite');
+  assert.equal(resolved.uploadsDir, absUploads);
+  assert.equal(resolved.dbPath, absDb);
 });
