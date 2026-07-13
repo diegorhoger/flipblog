@@ -111,7 +111,11 @@ export function splitIntoPages(html, options = {}) {
 
   const pages = groups
     .map(pageFromNodes)
-    .filter((p) => p.html.replace(/<[^>]*>/g, '').trim().length > 0);
+    .filter((p) => {
+      const text = p.html.replace(/<[^>]*>/g, '').trim();
+      const hasMedia = /<(img|iframe|video|audio|embed|object|svg)/i.test(p.html);
+      return text.length > 0 || hasMedia;
+    });
 
   if (pages.length === 0) return [{ index: 0, html: '', title: '' }];
   return pages.map((p, i) => ({ ...p, index: i }));

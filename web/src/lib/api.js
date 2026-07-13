@@ -36,6 +36,13 @@ export const api = {
   me: () => request('GET', '/api/auth/me'),
   register: (username, password, role) =>
     request('POST', '/api/auth/register', { body: { username, password, role } }),
+  changePassword: (currentPassword, newPassword) =>
+    request('POST', '/api/auth/change-password', { body: { currentPassword, newPassword } }),
+  uploadAvatar: (file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return request('POST', '/api/auth/avatar', { body: fd, isForm: true });
+  },
   upload: (file) => {
     const fd = new FormData();
     fd.append('file', file);

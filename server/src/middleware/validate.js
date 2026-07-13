@@ -15,6 +15,11 @@ export const registerSchema = z.object({
   role: z.enum(['admin', 'author']).optional().default('author'),
 });
 
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1).max(200),
+  newPassword: z.string().min(8, 'password must be at least 8 characters').max(200),
+});
+
 export const postSchema = z.object({
   title: z.string().min(1, 'title is required').max(200),
   author: z.string().max(120).optional().default(''),

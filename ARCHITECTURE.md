@@ -72,7 +72,12 @@ digraph flipblog {
 - **`auth/password.js`** — `scrypt` hash + timing-safe verify.
 - **`middleware/validate.js`** — `zod` schemas for login, registration, and post payloads; `validateBody` returns `400` with details.
 - **`middleware/requireAuth.js`** — verifies the session cookie, attaches `req.user` (incl. `role`), `401` otherwise; `requireRole(role)` guards admin-only routes (`403`).
-- **`routes/auth.js`** — login (sets cookie), logout, `me`, and admin-only `register` (creates users).
+- **`routes/auth.js`** — login (sets cookie), logout, `me` (incl. `created_at` + `avatar`), admin-only
+  `register` (creates users), `change-password` (authenticated users update their own password), and
+  `avatar` (authenticated users upload/change their profile picture).
+- **`middleware/upload.js`** — shared `multer` disk storage (random UUID filename, image-only filter,
+  size limit) + `uploadErrorHandler` (maps `LIMIT_FILE_SIZE` → 413, bad type → 415). Used by both
+  `routes/uploads.js` and the avatar route.
 - **`routes/posts.js`** — CRUD + `by-id` + list; delegates to `services/posts.js`.
 - **`routes/uploads.js`** — `multer` image upload to `public/uploads`, returns URL.
 - **`services/posts.js`** — business logic: slugify (accent-stripping), unique-slug guarantee, sanitize, excerpt
@@ -98,6 +103,7 @@ digraph flipblog {
 - **`pages/home.js`** — card grid of published posts.
 - **`pages/reader.js`** — fetches a post and mounts the flipbook; returns a cleanup fn.
 - **`pages/login.js`** — admin login form.
+- **`pages/profile.js`** — user profile (avatar upload/change, summary, change-password, subscription placeholder).
 - **`pages/admin.js`** — dashboard table (list/edit/delete) + editor view (new/edit).
 
 ## Key data flows

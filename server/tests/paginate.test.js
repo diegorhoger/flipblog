@@ -48,3 +48,16 @@ test('page indices are sequential starting at 0', () => {
   const pages = splitIntoPages('<h2>A</h2><p>1</p><hr data-page-break><h2>B</h2><p>2</p>');
   assert.deepEqual(pages.map((p) => p.index), [0, 1]);
 });
+
+test('image-only page is kept (not dropped as empty)', () => {
+  const pages = splitIntoPages('<p><img src="/uploads/abc.png" alt="x"></p>');
+  assert.equal(pages.length, 1);
+  assert.match(pages[0].html, /<img[^>]+src="\/uploads\/abc\.png"/);
+});
+
+test('a page with only an image and a page break still splits correctly', () => {
+  const html = '<h2>Capa</h2><p>intro</p><hr data-page-break><p><img src="/uploads/abc.png"></p>';
+  const pages = splitIntoPages(html);
+  assert.equal(pages.length, 2);
+  assert.match(pages[1].html, /<img/);
+});

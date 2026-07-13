@@ -2,6 +2,7 @@ import { h, clear } from '../lib/dom.js';
 import { api } from '../lib/api.js';
 import { navigate } from '../lib/router.js';
 import { formatDate } from '../lib/format.js';
+import { toast } from '../lib/toast.js';
 import { createEditor } from '../components/editor.js';
 
 async function requireAuth(view, navigate) {
@@ -123,8 +124,24 @@ export async function renderEditor({ params, view }) {
   const coverPreview = h('img', {
     src: post?.cover_image || '',
     alt: '',
-    style: { display: post?.cover_image ? 'block' : 'none', maxHeight: '120px', borderRadius: '8px', marginTop: '8px' },
+    style: { display: post?.cover_image ? 'block' : 'none', maxHeight: '160px', borderRadius: '8px', marginTop: '8px' },
   });
+
+  const removeCover = h(
+    'button',
+    {
+      class: 'btn btn-ghost',
+      type: 'button',
+      style: { display: post?.cover_image ? 'inline-flex' : 'none' },
+      onclick: () => {
+        cover.value = '';
+        coverPreview.src = '';
+        coverPreview.style.display = 'none';
+        removeCover.style.display = 'none';
+      },
+    },
+    'Remover'
+  );
 
   const fileInput = h('input', { type: 'file', accept: 'image/*', style: { display: 'none' } });
   fileInput.addEventListener('change', async () => {
@@ -135,8 +152,9 @@ export async function renderEditor({ params, view }) {
       cover.value = res.data.url;
       coverPreview.src = res.data.url;
       coverPreview.style.display = 'block';
+      removeCover.style.display = 'inline-flex';
     } else {
-      alert('Falha no upload: ' + (res.data?.error || res.status));
+      toast('Falha no upload da capa: ' + (res.data?.error || res.status), 'error');
     }
   });
 
@@ -162,6 +180,7 @@ export async function renderEditor({ params, view }) {
       error.textContent = 'Erro ao salvar: ' + (res.data?.error || res.status);
       return;
     }
+    toast(editing ? 'Publicação atualizada!' : 'Publicação criada!', 'success');
     if (openPreview) window.open(`#/read/${res.data.slug}`, '_blank');
     navigate('/admin');
   }
@@ -185,8 +204,9 @@ export async function renderEditor({ params, view }) {
     h('div', { class: 'field' },
       h('label', null, 'Imagem de capa (URL ou envio)'),
       cover,
-      h('div', { style: { display: 'flex', gap: '8px', marginTop: '6px' } },
+      h('div', { style: { display: 'flex', gap: '8px', marginTop: '6px', alignItems: 'center' } },
         h('button', { class: 'btn btn-ghost', type: 'button', onclick: () => fileInput.click() }, 'Enviar imagem'),
+        removeCover,
         fileInput
       ),
       coverPreview
