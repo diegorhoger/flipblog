@@ -1,10 +1,11 @@
 import migration001 from './001_add_role.js';
 import migration002 from './002_add_avatar.js';
+import migration003 from './003_add_author_id.js';
 
 // Ordered migration registry. Add new migrations here in ascending version
 // order. Imports are static (not dynamic) so migrations run synchronously —
 // node:sqlite is synchronous and getDb() must return a fully-migrated schema.
-const MIGRATIONS = [migration001, migration002].sort((a, b) => a.version - b.version);
+const MIGRATIONS = [migration001, migration002, migration003].sort((a, b) => a.version - b.version);
 
 function ensureMigrationsTable(db) {
   db.exec(
@@ -34,12 +35,13 @@ function validateUniqueVersions(migrations) {
 // back cleanly instead of leaving a half-applied schema. Migrations are applied
 // in version order; already-applied versions are skipped. Any error is thrown
 // so the caller fails closed (the app must not serve requests on a broken
-// schema).
-export function runMigrations(db) {
-  validateUniqueVersions(MIGRATIONS);
+// schema). An optional `migrations` list can be supplied (used by tests to force
+// failure scenarios); otherwise the built-in registry is used.
+export function runMigrations(db, migrations = MIGRATIONS) {
+  validateUniqueVersions(migrations);
   ensureMigrationsTable(db);
   const applied = appliedVersions(db);
-  const pending = MIGRATIONS.filter((m) => !applied.has(m.version));
+  const pending = migrations.filter((m) => !applied.has(m.version));
   if (pending.length === 0) return;
 
   db.exec('BEGIN IMMEDIATE');

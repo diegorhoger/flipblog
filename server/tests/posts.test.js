@@ -79,3 +79,58 @@ test('updating a missing post returns 404', async () => {
   const res = await agent.put('/api/posts/999999').send({ title: 'x' });
   assert.equal(res.status, 404);
 });
+
+test('ownership: a non-owner author cannot edit another author’s post', async () => {
+  const admin = await authedAgent();
+  // Register a second author via the admin-only endpoint.
+  const reg = await admin
+    .post('/api/auth/register')
+    .send({ username: 'author2', password: 'password2', role: 'author' });
+  assert.equal(reg.status, 201);
+
+  const owner = await authedAgent();
+  const created = await owner
+    .post('/api/posts')
+    .send({ title: 'Dono', content: '<p>intro</p>' });
+  assert.equal(created.status, 201);
+  const id = created.body.id;
+
+  // Log in as author2.
+  const intruder = request.agent(app);
+  const login = await intruder.post('/api/auth/login').send({ username: 'author2', password: 'password2' });
+  assert.equal(login.status, 200);
+
+  const forbidden = await intruder.put(`/api/posts/${id}`).send({ title: 'Hack' });
+  assert.equal(forbidden.status, 403);
+
+  // The owner can still edit their own post.
+  const ok = await owner.put(`/api/posts/${id}`).send({ title: 'Renomeado pelo dono' });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.title, 'Renomeado pelo dono');
+
+  // An admin can edit any post.
+  const adminEdit = await admin.put(`/api/posts/${id}`).send({ title: 'Pelo admin' });
+  assert.equal(adminEdit.status, 200);
+  assert.equal(adminEdit.body.title, 'Pelo admin');
+});
+
+test('ownership: a non-owner author cannot delete another author’s post', async () => {
+  const admin = await authedAgent();
+  const reg = await admin
+    .post('/api/auth/register')
+    .send({ username: 'author3', password: 'password3', role: 'author' });
+  assert.equal(reg.status, 201);
+
+  const owner = await authedAgent();
+  const created = await owner.post('/api/posts').send({ title: 'Alvo', content: '<p>x</p>' });
+  const id = created.body.id;
+
+  const intruder = request.agent(app);
+  await intruder.post('/api/auth/login').send({ username: 'author3', password: 'password3' });
+
+  const forbidden = await intruder.delete(`/api/posts/${id}`);
+  assert.equal(forbidden.status, 403);
+
+  const ownerDelete = await owner.delete(`/api/posts/${id}`);
+  assert.equal(ownerDelete.status, 204);
+});

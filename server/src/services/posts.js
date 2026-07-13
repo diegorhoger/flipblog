@@ -40,6 +40,7 @@ function publicFields(row) {
     slug: row.slug,
     title: row.title,
     author: row.author,
+    author_id: row.author_id,
     excerpt: row.excerpt,
     cover_image: row.cover_image,
     status: row.status,
@@ -93,7 +94,7 @@ function hydrate(row) {
   return { ...publicFields(row), content: row.content, pages };
 }
 
-export function createPost(input = {}) {
+export function createPost(input = {}, actor = null) {
   const db = getDb();
   const title = sanitizeText(input.title, 200);
   if (!title) throw new Error('title is required');
@@ -101,16 +102,21 @@ export function createPost(input = {}) {
   const excerpt = input.excerpt ? sanitizeText(input.excerpt, 280) : excerptFromContent(content);
   const slug = ensureUniqueSlug(db, slugify(input.slug || title));
   const now = new Date().toISOString();
+  // Ownership: the creating user's id is recorded. Falls back to null for
+  // non-authenticated callers (e.g. seeded content) but normal requests pass the
+  // authenticated user. The display `author` name stays client-supplied.
+  const authorId = actor && Number.isFinite(Number(actor.sub)) ? Number(actor.sub) : null;
 
   const info = db
     .prepare(
-      `INSERT INTO posts (slug, title, author, excerpt, cover_image, content, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO posts (slug, title, author, author_id, excerpt, cover_image, content, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       slug,
       title,
       sanitizeText(input.author, 120),
+      authorId,
       excerpt,
       input.cover_image ? String(input.cover_image).slice(0, 500) : null,
       content,
@@ -122,10 +128,23 @@ export function createPost(input = {}) {
   return getPostById(info.lastInsertRowid);
 }
 
-export function updatePost(id, input = {}) {
+// Authors may only modify their own posts; admins may modify any post.
+function assertCanManage(existing, actor) {
+  if (!actor) throw new Error('forbidden');
+  const isAdmin = actor.role === 'admin';
+  const isOwner = existing.author_id != null && Number(actor.sub) === Number(existing.author_id);
+  if (!isAdmin && !isOwner) {
+    const err = new Error('forbidden');
+    err.status = 403;
+    throw err;
+  }
+}
+
+export function updatePost(id, input = {}, actor = null) {
   const db = getDb();
   const existing = db.prepare('SELECT * FROM posts WHERE id = ?').get(Number(id));
   if (!existing) return null;
+  assertCanManage(existing, actor);
 
   const title = input.title != null ? sanitizeText(input.title, 200) : existing.title;
   const content = input.content != null ? sanitizeContent(input.content) : existing.content;
@@ -150,8 +169,11 @@ export function updatePost(id, input = {}) {
   return getPostById(existing.id);
 }
 
-export function deletePost(id) {
+export function deletePost(id, actor = null) {
   const db = getDb();
+  const existing = db.prepare('SELECT * FROM posts WHERE id = ?').get(Number(id));
+  if (!existing) return false;
+  assertCanManage(existing, actor);
   const info = db.prepare('DELETE FROM posts WHERE id = ?').run(Number(id));
   return info.changes > 0;
 }

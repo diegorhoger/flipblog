@@ -86,9 +86,10 @@ export function createEditor({ initialHTML = '' } = {}) {
   // accessibility scanning tools).
   function promptAltText() {
     const value = window.prompt(
-      'Texto alternativo (alt) da imagem — importante para SEO e acessibilidade.\n' +
-        'Descreva o que a imagem mostra. Para uma imagem puramente decorativa, deixe em branco. ' +
-        'Cancelar aborta a inserção da imagem.',
+      'Texto alternativo (alt) da imagem.\n' +
+        'Descreva brevemente o que a imagem mostra e sua função no conteúdo. ' +
+        'Não use palavras-chave para SEO — escreva para pessoas que não veem a imagem. ' +
+        'Deixe em branco apenas se a imagem for puramente decorativa. Cancelar aborta a inserção.',
       ''
     );
     if (value == null) return { canceled: true };

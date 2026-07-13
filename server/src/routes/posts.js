@@ -24,7 +24,7 @@ router.get('/:slug', (req, res) => {
 
 router.post('/', requireAuth, validateBody(postSchema), (req, res, next) => {
   try {
-    const post = createPost(req.valid);
+    const post = createPost(req.valid, req.user);
     res.status(201).json(post);
   } catch (err) {
     next(err);
@@ -33,7 +33,7 @@ router.post('/', requireAuth, validateBody(postSchema), (req, res, next) => {
 
 router.put('/:id', requireAuth, validateBody(postSchema), (req, res, next) => {
   try {
-    const post = updatePost(req.params.id, req.valid);
+    const post = updatePost(req.params.id, req.valid, req.user);
     if (!post) return res.status(404).json({ error: 'not_found' });
     res.json(post);
   } catch (err) {
@@ -43,7 +43,7 @@ router.put('/:id', requireAuth, validateBody(postSchema), (req, res, next) => {
 
 router.delete('/:id', requireAuth, (req, res, next) => {
   try {
-    const ok = deletePost(req.params.id);
+    const ok = deletePost(req.params.id, req.user);
     if (!ok) return res.status(404).json({ error: 'not_found' });
     res.status(204).end();
   } catch (err) {
