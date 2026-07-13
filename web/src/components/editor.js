@@ -119,13 +119,22 @@ export function createEditor({ initialHTML = '' } = {}) {
 
   function insertImage() {
     const input = h('input', { type: 'file', accept: 'image/*', style: { display: 'none' } });
-    input.addEventListener('change', () => {
-      const file = input.files && input.files[0];
-      if (file) uploadAndInsert(file, quill.getSelection()?.index);
-    });
+    const cleanup = () => input.remove();
+    // Remove the hidden input in every case: a file is chosen, the picker is
+    // dismissed, or it is never used. `{ once: true }` ensures the handler runs
+    // at most once even if both events fire.
+    input.addEventListener(
+      'change',
+      () => {
+        const file = input.files && input.files[0];
+        if (file) uploadAndInsert(file, quill.getSelection()?.index);
+        cleanup();
+      },
+      { once: true }
+    );
+    input.addEventListener('cancel', cleanup, { once: true });
     document.body.append(input);
     input.click();
-    input.addEventListener('remove', () => input.remove());
   }
 
   function insertPageBreak() {

@@ -40,7 +40,6 @@ function publicFields(row) {
     slug: row.slug,
     title: row.title,
     author: row.author,
-    author_id: row.author_id,
     excerpt: row.excerpt,
     cover_image: row.cover_image,
     status: row.status,
@@ -50,22 +49,36 @@ function publicFields(row) {
   };
 }
 
-export function listPosts({ status = 'published', page = 1, limit = 12 } = {}) {
+// author_id is intentionally excluded from public responses. Ownership
+// decisions are made server-side using the row's author_id; it is never
+// exposed to clients.
+export function listPosts({ status = 'published', page = 1, limit = 12, actor = null } = {}) {
   const db = getDb();
   const safePage = Math.max(1, Number(page) || 1);
   const safeLimit = Math.min(50, Math.max(1, Number(limit) || 12));
   const offset = (safePage - 1) * safeLimit;
 
   const filter = status && status !== 'all' ? status : null;
+  const where = [];
+  const params = [];
+  if (filter) {
+    where.push('status = ?');
+    params.push(filter);
+  }
+  // Non-admin authors may see published posts plus their own (including drafts).
+  if (actor && actor.role !== 'admin') {
+    where.push('(status = ? OR author_id = ?)');
+    params.push('published', Number(actor.sub));
+  }
+  const clause = where.length ? `WHERE ${where.join(' AND ')} ` : '';
+
   const total = db
-    .prepare('SELECT COUNT(*) AS c FROM posts WHERE (? IS NULL OR status = ?)')
-    .get(filter, filter).c;
+    .prepare(`SELECT COUNT(*) AS c FROM posts ${clause}`)
+    .get(...params).c;
 
   const rows = db
-    .prepare(
-      'SELECT * FROM posts WHERE (? IS NULL OR status = ?) ORDER BY created_at DESC LIMIT ? OFFSET ?'
-    )
-    .all(filter, filter, safeLimit, offset);
+    .prepare(`SELECT * FROM posts ${clause}ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+    .all(...params, safeLimit, offset);
 
   return {
     items: rows.map(publicFields),
@@ -76,16 +89,38 @@ export function listPosts({ status = 'published', page = 1, limit = 12 } = {}) {
   };
 }
 
-export function getPostBySlug(slug) {
+export function getPostBySlug(slug, actor = null) {
   const db = getDb();
   const row = db.prepare('SELECT * FROM posts WHERE slug = ?').get(slug);
+  if (!row) return null;
+  // Unpublished posts are visible only to their owner or an admin. For everyone
+  // else (including anonymous) they do not exist (404), to avoid confirming a
+  // private draft's existence.
+  if (row.status !== 'published' && !canRead(row, actor)) return null;
   return hydrate(row);
 }
 
-export function getPostById(id) {
+export function getPostById(id, actor = null) {
   const db = getDb();
   const row = db.prepare('SELECT * FROM posts WHERE id = ?').get(Number(id));
+  if (!row) return null;
+  // Published posts are world-readable; unpublished posts require ownership or
+  // admin. Without this guard, the null-actor internal calls below (and anonymous
+  // readers) would be wrongly rejected for public content.
+  if (row.status !== 'published' && !canRead(row, actor)) {
+    const err = new Error('forbidden');
+    err.status = 403;
+    throw err;
+  }
   return hydrate(row);
+}
+
+// Whether the given actor may read a (possibly unpublished) post. Returns false
+// for null actors (anonymous) and for non-owners who are not admins.
+function canRead(row, actor) {
+  if (!actor) return false;
+  if (actor.role === 'admin') return true;
+  return row.author_id != null && Number(actor.sub) === Number(row.author_id);
 }
 
 function hydrate(row) {
@@ -125,19 +160,21 @@ export function createPost(input = {}, actor = null) {
       now
     );
 
-  return getPostById(info.lastInsertRowid);
+  return getPostById(info.lastInsertRowid, actor);
+}
+
+function forbidden() {
+  const err = new Error('forbidden');
+  err.status = 403;
+  return err;
 }
 
 // Authors may only modify their own posts; admins may modify any post.
 function assertCanManage(existing, actor) {
-  if (!actor) throw new Error('forbidden');
+  if (!actor) throw forbidden();
   const isAdmin = actor.role === 'admin';
   const isOwner = existing.author_id != null && Number(actor.sub) === Number(existing.author_id);
-  if (!isAdmin && !isOwner) {
-    const err = new Error('forbidden');
-    err.status = 403;
-    throw err;
-  }
+  if (!isAdmin && !isOwner) throw forbidden();
 }
 
 export function updatePost(id, input = {}, actor = null) {
@@ -166,7 +203,7 @@ export function updatePost(id, input = {}, actor = null) {
      WHERE id=?`
   ).run(slug, title, author, excerpt, cover, content, status, now, existing.id);
 
-  return getPostById(existing.id);
+  return getPostById(existing.id, actor);
 }
 
 export function deletePost(id, actor = null) {

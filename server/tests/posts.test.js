@@ -51,16 +51,76 @@ test('validation rejects missing title', async () => {
   assert.equal(res.body.error, 'validation_failed');
 });
 
-test('drafts are excluded from published list but visible with status=all', async () => {
+test('anonymous listing never exposes drafts (status=all forced to published)', async () => {
   const agent = await authedAgent();
   await agent.post('/api/posts').send({ title: 'Rascunho', status: 'draft', content: '<p>draft</p>' });
 
   const published = await request(app).get('/api/posts?status=published');
   assert.equal(published.body.total, 0);
 
+  // Anonymous callers cannot list drafts via status=all.
   const all = await request(app).get('/api/posts?status=all');
-  assert.equal(all.body.total, 1);
-  assert.equal(all.body.items[0].status, 'draft');
+  assert.equal(all.body.total, 0);
+});
+
+test('authenticated editor can fetch a post by id', async () => {
+  const agent = await authedAgent();
+  const created = await agent.post('/api/posts').send({ title: 'Editor test', content: '<p>content</p>' });
+  assert.equal(created.status, 201);
+
+  const fetched = await agent.get(`/api/posts/id/${created.body.id}`);
+  assert.equal(fetched.status, 200);
+  assert.equal(fetched.body.id, created.body.id);
+});
+
+test('draft visibility: anonymous slug returns 404, owner and admin can read', async () => {
+  const admin = await authedAgent();
+  // Create a second author.
+  const reg = await admin
+    .post('/api/auth/register')
+    .send({ username: 'draftauthor', password: 'passwordD', role: 'author' });
+  assert.equal(reg.status, 201);
+
+  const owner = await authedAgent();
+  const created = await owner
+    .post('/api/posts')
+    .send({ title: 'Rascunho dono', status: 'draft', content: '<p>secreto</p>' });
+  const slug = created.body.slug;
+  const id = created.body.id;
+
+  // Anonymous cannot read the draft by slug or id.
+  const anonSlug = await request(app).get(`/api/posts/${slug}`);
+  assert.equal(anonSlug.status, 404);
+  const anonId = await request(app).get(`/api/posts/id/${id}`);
+  assert.equal(anonId.status, 401);
+
+  // Owner can read their own draft by id.
+  const ownerRead = await owner.get(`/api/posts/id/${id}`);
+  assert.equal(ownerRead.status, 200);
+  assert.equal(ownerRead.body.id, id);
+
+  // A different author is forbidden from reading the draft by id.
+  const other = request.agent(app);
+  await other.post('/api/auth/login').send({ username: 'draftauthor', password: 'passwordD' });
+  const otherRead = await other.get(`/api/posts/id/${id}`);
+  assert.equal(otherRead.status, 403);
+
+  // Admin can read any draft by id.
+  const adminRead = await admin.get(`/api/posts/id/${id}`);
+  assert.equal(adminRead.status, 200);
+  assert.equal(adminRead.body.id, id);
+});
+
+test('published posts remain publicly readable by slug', async () => {
+  const agent = await authedAgent();
+  const created = await agent
+    .post('/api/posts')
+    .send({ title: 'Publico', content: '<p>hello</p>' });
+  const slug = created.body.slug;
+
+  const anon = await request(app).get(`/api/posts/${slug}`);
+  assert.equal(anon.status, 200);
+  assert.equal(anon.body.slug, slug);
 });
 
 test('malicious HTML in content is sanitized', async () => {
