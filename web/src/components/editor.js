@@ -95,12 +95,12 @@ export function createEditor({ initialHTML = '' } = {}) {
     // not upload or insert anything. This also avoids orphaned uploads when the
     // author aborts.
     const altResult = await promptAltText(file);
-    if (altResult.canceled) return;
+    if (altResult.canceled) return false;
 
     const res = await api.upload(file);
     if (!res.ok) {
       toast('Falha ao enviar a imagem: ' + (res.data?.error || res.status), 'error');
-      return;
+      return false;
     }
     // Insert the image first, then apply alt via formatText. Quill normalizes
     // empty attributes out of a Delta insert, so setting alt afterwards is the
@@ -109,6 +109,19 @@ export function createEditor({ initialHTML = '' } = {}) {
     quill.updateContents(new Delta().retain(safeIndex).insert({ image: res.data.url }), 'user');
     quill.formatText(safeIndex, 1, 'alt', altResult.alt, 'user');
     quill.setSelection(safeIndex + 1, 'user');
+    return true;
+  }
+
+  // Insert several image files in order, prompting for alt text for each one.
+  // Images are uploaded and inserted one at a time, so the insertion point stays
+  // correct even if the author cancels or an upload fails partway through:
+  // only images that are actually inserted advance the running index.
+  async function insertImages(files, startIndex) {
+    let index = typeof startIndex === 'number' ? startIndex : quill.getLength();
+    for (const file of files) {
+      const inserted = await uploadAndInsert(file, index);
+      if (inserted) index += 1;
+    }
   }
 
   function insertImage() {
@@ -151,18 +164,19 @@ export function createEditor({ initialHTML = '' } = {}) {
     qlToolbar.append(pbButton);
   }
 
-  // Drag-and-drop and paste images directly into the editor.
+  // Drag-and-drop and paste images directly into the editor. Every image file
+  // in the payload is inserted in order, each through its own alt-text modal.
   quill.root.addEventListener('drop', (e) => {
-    const file = [...(e.dataTransfer?.files || [])].find((f) => f.type.startsWith('image/'));
-    if (!file) return;
+    const files = [...(e.dataTransfer?.files || [])].filter((f) => f.type.startsWith('image/'));
+    if (files.length === 0) return;
     e.preventDefault();
-    uploadAndInsert(file, quill.getSelection()?.index);
+    insertImages(files, quill.getSelection()?.index);
   });
   quill.root.addEventListener('paste', (e) => {
-    const file = [...(e.clipboardData?.files || [])].find((f) => f.type.startsWith('image/'));
-    if (!file) return;
+    const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
+    if (files.length === 0) return;
     e.preventDefault();
-    uploadAndInsert(file, quill.getSelection()?.index);
+    insertImages(files, quill.getSelection()?.index);
   });
 
   return {
@@ -170,8 +184,9 @@ export function createEditor({ initialHTML = '' } = {}) {
     getContent: () => quill.getSemanticHTML(),
     getText: () => quill.getText(),
     focus: () => quill.focus(),
-    // Test-only hook so unit tests can exercise the alt-text flow without
+    // Test-only hooks so unit tests can exercise the alt-text flow without
     // depending on jsdom drag-and-drop/paste event quirks. Not used in app code.
     __test_uploadAndInsert: typeof process !== 'undefined' && process.env?.VITEST ? uploadAndInsert : undefined,
+    __test_insertImages: typeof process !== 'undefined' && process.env?.VITEST ? insertImages : undefined,
   };
 }

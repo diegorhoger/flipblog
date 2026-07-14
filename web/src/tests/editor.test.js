@@ -13,7 +13,7 @@ const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 async function flush() {
-  for (let i = 0; i < 5; i++) await Promise.resolve();
+  for (let i = 0; i < 12; i++) await Promise.resolve();
 }
 
 function getDialog() {
@@ -174,5 +174,79 @@ describe('editor image alt modal', () => {
 
     const editor2 = createEditor({ initialHTML: html });
     expect(editor2.getContent()).toContain('alt="Capa da revista"');
+  });
+
+  it('inserts multiple pasted/dropped images in order, each with its alt', async () => {
+    const editor = createEditor();
+    const f0 = new File(['a'], 'a.png', { type: 'image/png' });
+    const f1 = new File(['b'], 'b.png', { type: 'image/png' });
+    api.upload.mockImplementation((file) =>
+      Promise.resolve({ ok: true, data: { url: '/uploads/' + file.name } })
+    );
+    const p = editor.__test_insertImages([f0, f1], 0);
+    await confirmDialog({ alt: 'Primeira' });
+    await flush();
+    await confirmDialog({ alt: 'Segunda' });
+    await p;
+    await flush();
+    const html = editor.getContent();
+    expect(api.upload).toHaveBeenCalledTimes(2);
+    expect(html).toContain('<img src="/uploads/a.png" alt="Primeira">');
+    expect(html).toContain('<img src="/uploads/b.png" alt="Segunda">');
+    expect(html.indexOf('alt="Primeira"')).toBeLessThan(html.indexOf('alt="Segunda"'));
+  });
+
+  it('keeps decorative alt for every image in a multi-image batch', async () => {
+    const editor = createEditor();
+    const f0 = new File(['a'], 'a.png', { type: 'image/png' });
+    const f1 = new File(['b'], 'b.png', { type: 'image/png' });
+    api.upload.mockImplementation((file) =>
+      Promise.resolve({ ok: true, data: { url: '/uploads/' + file.name } })
+    );
+    const p = editor.__test_insertImages([f0, f1], 0);
+    await confirmDialog({ decorative: true });
+    await flush();
+    await confirmDialog({ decorative: true });
+    await p;
+    await flush();
+    const html = editor.getContent();
+    expect(html).toContain('<img src="/uploads/a.png" alt="">');
+    expect(html).toContain('<img src="/uploads/b.png" alt="">');
+  });
+
+  it('skips a canceled image without shifting later inserts', async () => {
+    const editor = createEditor();
+    const f0 = new File(['a'], 'a.png', { type: 'image/png' });
+    const f1 = new File(['b'], 'b.png', { type: 'image/png' });
+    api.upload.mockImplementation((file) =>
+      Promise.resolve({ ok: true, data: { url: '/uploads/' + file.name } })
+    );
+    const p = editor.__test_insertImages([f0, f1], 0);
+    // First image canceled -> no upload, no insert.
+    cancelDialog();
+    await flush();
+    // Second image described -> inserted at the original start index.
+    await confirmDialog({ alt: 'Mantida' });
+    await p;
+    await flush();
+    expect(api.upload).toHaveBeenCalledTimes(1);
+    const html = editor.getContent();
+    expect(html).not.toContain('/uploads/a.png');
+    expect(html).toContain('<img src="/uploads/b.png" alt="Mantida">');
+  });
+
+  it('drop handler only inserts image files, ignoring other payloads', async () => {
+    const editor = createEditor();
+    const root = editor.element.querySelector('.ql-editor');
+    const img = new File(['x'], 'pic.png', { type: 'image/png' });
+    const doc = new File(['x'], 'doc.pdf', { type: 'application/pdf' });
+    api.upload.mockResolvedValue({ ok: true, data: { url: '/uploads/pic.png' } });
+    const dropEvent = new Event('drop', { bubbles: true, cancelable: true });
+    dropEvent.dataTransfer = { files: [img, doc] };
+    root.dispatchEvent(dropEvent);
+    await confirmDialog({ alt: 'So imagem' });
+    await flush();
+    expect(api.upload).toHaveBeenCalledTimes(1);
+    expect(editor.getContent()).toContain('<img src="/uploads/pic.png" alt="So imagem">');
   });
 });
