@@ -10,6 +10,12 @@ server/public/
 server/data/
 server/public/uploads/
 
+# Defense-in-depth: if the server is ever launched from server/ instead of the
+# repo root, relative storage paths can nest (server/server/public/uploads). The
+# real fix is config.js resolving paths from the server root; this rule just
+# keeps the resulting junk out of version control.
+server/server/
+
 # Environment
 .env
 .env.local
@@ -18,6 +24,7 @@ server/public/uploads/
 # Logs
 npm-debug.log*
 *.log
+*.err
 
 # Editor / OS
 .DS_Store

@@ -106,8 +106,10 @@ All responses are JSON. API responses carry `Cache-Control: no-store`.
 |--------|------|------|------|
 | `POST` | `/api/auth/login` | — | `{ username, password }` → sets session cookie |
 | `POST` | `/api/auth/register` | admin | `{ username, password, role? }` → creates a user (see below) |
+| `POST` | `/api/auth/change-password` | cookie | `{ currentPassword, newPassword }` → updates the caller's own password (verifies current first) |
+| `POST` | `/api/auth/avatar` | cookie | `multipart/form-data` file field → sets the caller's profile picture, returns `{ avatar }` |
 | `POST` | `/api/auth/logout` | — | clears session cookie |
-| `GET`  | `/api/auth/me` | cookie | returns current user (incl. `role`) or `401` |
+| `GET`  | `/api/auth/me` | cookie | returns current user (incl. `role` and `created_at`) or `401` |
 
 ### Posts
 | Method | Path | Auth | Notes |
@@ -147,6 +149,10 @@ name for the users table) with a `role` column: `admin` or `author`.
   - `role`: optional, `author` (default) or `admin`. New users cannot grant themselves a role the
     caller lacks — the endpoint simply accepts the provided value, so only trust `admin` callers.
   - Returns `201` with the created `{ user: { username, role } }` (no password hash).
+- **Profile & password** — any signed-in user can open the **Perfil** page (`#/profile`) to view their
+  username, role, and join date, upload/change a profile picture (`POST /api/auth/avatar`, stored under
+  `/uploads`), change their own password (`POST /api/auth/change-password`, which verifies the current
+  password first), and see a placeholder for a future subscription plan.
 - **Roles & access** — the session JWT carries the user's `role`. `requireRole('admin')` guards the
   registration endpoint; all other write operations (posts, uploads) require only a valid session, so
   both `admin` and `author` accounts can author content. Promote/limit accounts by editing the

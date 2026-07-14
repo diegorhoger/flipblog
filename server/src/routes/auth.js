@@ -1,9 +1,18 @@
 import { Router } from 'express';
 import { config } from '../config.js';
 import { signJwt } from '../auth/jwt.js';
-import { validateBody, loginSchema, registerSchema } from '../middleware/validate.js';
+import { validateBody, loginSchema, registerSchema, changePasswordSchema } from '../middleware/validate.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
-import { authenticate, createUser, getAdminByUsername } from '../services/admin.js';
+import { upload, uploadErrorHandler } from '../middleware/upload.js';
+import {
+  authenticate,
+  createUser,
+  getAdminByUsername,
+  getUserById,
+  verifyUserPassword,
+  updatePassword,
+  setAvatar,
+} from '../services/admin.js';
 
 const router = Router();
 
@@ -40,8 +49,53 @@ router.post('/logout', (req, res) => {
 });
 
 router.get('/me', requireAuth, (req, res) => {
-  res.json({ user: { username: req.user.username, role: req.user.role } });
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(401).json({ error: 'unauthorized' });
+  res.json({
+    user: {
+      username: user.username,
+      role: user.role,
+      avatar: user.avatar,
+      created_at: user.created_at,
+    },
+  });
 });
+
+// Authenticated users upload/change their own profile picture (any role).
+router.post(
+  '/avatar',
+  requireAuth,
+  upload.single('file'),
+  async (req, res, next) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'no_file' });
+      const url = `${config.uploadsUrl}/${req.file.filename}`;
+      setAvatar(req.user.sub, url);
+      res.json({ avatar: url });
+    } catch (err) {
+      next(err);
+    }
+  },
+  uploadErrorHandler
+);
+
+// Authenticated users change their own password (current password required).
+router.post(
+  '/change-password',
+  requireAuth,
+  validateBody(changePasswordSchema),
+  async (req, res, next) => {
+    try {
+      const { currentPassword, newPassword } = req.valid;
+      const ok = await verifyUserPassword(req.user.sub, currentPassword);
+      if (!ok) return res.status(401).json({ error: 'invalid_credentials' });
+      await updatePassword(req.user.sub, newPassword);
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 // Admin-only registration: create additional users (e.g. authors). Self-signup
 // is intentionally disabled; only an authenticated admin may invite new users.

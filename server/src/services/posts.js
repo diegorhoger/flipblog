@@ -49,22 +49,36 @@ function publicFields(row) {
   };
 }
 
-export function listPosts({ status = 'published', page = 1, limit = 12 } = {}) {
+// author_id is intentionally excluded from public responses. Ownership
+// decisions are made server-side using the row's author_id; it is never
+// exposed to clients.
+export function listPosts({ status = 'published', page = 1, limit = 12, actor = null } = {}) {
   const db = getDb();
   const safePage = Math.max(1, Number(page) || 1);
   const safeLimit = Math.min(50, Math.max(1, Number(limit) || 12));
   const offset = (safePage - 1) * safeLimit;
 
   const filter = status && status !== 'all' ? status : null;
+  const where = [];
+  const params = [];
+  if (filter) {
+    where.push('status = ?');
+    params.push(filter);
+  }
+  // Non-admin authors may see published posts plus their own (including drafts).
+  if (actor && actor.role !== 'admin') {
+    where.push('(status = ? OR author_id = ?)');
+    params.push('published', Number(actor.sub));
+  }
+  const clause = where.length ? `WHERE ${where.join(' AND ')} ` : '';
+
   const total = db
-    .prepare('SELECT COUNT(*) AS c FROM posts WHERE (? IS NULL OR status = ?)')
-    .get(filter, filter).c;
+    .prepare(`SELECT COUNT(*) AS c FROM posts ${clause}`)
+    .get(...params).c;
 
   const rows = db
-    .prepare(
-      'SELECT * FROM posts WHERE (? IS NULL OR status = ?) ORDER BY created_at DESC LIMIT ? OFFSET ?'
-    )
-    .all(filter, filter, safeLimit, offset);
+    .prepare(`SELECT * FROM posts ${clause}ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+    .all(...params, safeLimit, offset);
 
   return {
     items: rows.map(publicFields),
@@ -75,16 +89,38 @@ export function listPosts({ status = 'published', page = 1, limit = 12 } = {}) {
   };
 }
 
-export function getPostBySlug(slug) {
+export function getPostBySlug(slug, actor = null) {
   const db = getDb();
   const row = db.prepare('SELECT * FROM posts WHERE slug = ?').get(slug);
+  if (!row) return null;
+  // Unpublished posts are visible only to their owner or an admin. For everyone
+  // else (including anonymous) they do not exist (404), to avoid confirming a
+  // private draft's existence.
+  if (row.status !== 'published' && !canRead(row, actor)) return null;
   return hydrate(row);
 }
 
-export function getPostById(id) {
+export function getPostById(id, actor = null) {
   const db = getDb();
   const row = db.prepare('SELECT * FROM posts WHERE id = ?').get(Number(id));
+  if (!row) return null;
+  // Published posts are world-readable; unpublished posts require ownership or
+  // admin. Without this guard, the null-actor internal calls below (and anonymous
+  // readers) would be wrongly rejected for public content.
+  if (row.status !== 'published' && !canRead(row, actor)) {
+    const err = new Error('forbidden');
+    err.status = 403;
+    throw err;
+  }
   return hydrate(row);
+}
+
+// Whether the given actor may read a (possibly unpublished) post. Returns false
+// for null actors (anonymous) and for non-owners who are not admins.
+function canRead(row, actor) {
+  if (!actor) return false;
+  if (actor.role === 'admin') return true;
+  return row.author_id != null && Number(actor.sub) === Number(row.author_id);
 }
 
 function hydrate(row) {
@@ -93,7 +129,7 @@ function hydrate(row) {
   return { ...publicFields(row), content: row.content, pages };
 }
 
-export function createPost(input = {}) {
+export function createPost(input = {}, actor = null) {
   const db = getDb();
   const title = sanitizeText(input.title, 200);
   if (!title) throw new Error('title is required');
@@ -101,16 +137,21 @@ export function createPost(input = {}) {
   const excerpt = input.excerpt ? sanitizeText(input.excerpt, 280) : excerptFromContent(content);
   const slug = ensureUniqueSlug(db, slugify(input.slug || title));
   const now = new Date().toISOString();
+  // Ownership: the creating user's id is recorded. Falls back to null for
+  // non-authenticated callers (e.g. seeded content) but normal requests pass the
+  // authenticated user. The display `author` name stays client-supplied.
+  const authorId = actor && Number.isFinite(Number(actor.sub)) ? Number(actor.sub) : null;
 
   const info = db
     .prepare(
-      `INSERT INTO posts (slug, title, author, excerpt, cover_image, content, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO posts (slug, title, author, author_id, excerpt, cover_image, content, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       slug,
       title,
       sanitizeText(input.author, 120),
+      authorId,
       excerpt,
       input.cover_image ? String(input.cover_image).slice(0, 500) : null,
       content,
@@ -119,13 +160,28 @@ export function createPost(input = {}) {
       now
     );
 
-  return getPostById(info.lastInsertRowid);
+  return getPostById(info.lastInsertRowid, actor);
 }
 
-export function updatePost(id, input = {}) {
+function forbidden() {
+  const err = new Error('forbidden');
+  err.status = 403;
+  return err;
+}
+
+// Authors may only modify their own posts; admins may modify any post.
+function assertCanManage(existing, actor) {
+  if (!actor) throw forbidden();
+  const isAdmin = actor.role === 'admin';
+  const isOwner = existing.author_id != null && Number(actor.sub) === Number(existing.author_id);
+  if (!isAdmin && !isOwner) throw forbidden();
+}
+
+export function updatePost(id, input = {}, actor = null) {
   const db = getDb();
   const existing = db.prepare('SELECT * FROM posts WHERE id = ?').get(Number(id));
   if (!existing) return null;
+  assertCanManage(existing, actor);
 
   const title = input.title != null ? sanitizeText(input.title, 200) : existing.title;
   const content = input.content != null ? sanitizeContent(input.content) : existing.content;
@@ -147,11 +203,14 @@ export function updatePost(id, input = {}) {
      WHERE id=?`
   ).run(slug, title, author, excerpt, cover, content, status, now, existing.id);
 
-  return getPostById(existing.id);
+  return getPostById(existing.id, actor);
 }
 
-export function deletePost(id) {
+export function deletePost(id, actor = null) {
   const db = getDb();
+  const existing = db.prepare('SELECT * FROM posts WHERE id = ?').get(Number(id));
+  if (!existing) return false;
+  assertCanManage(existing, actor);
   const info = db.prepare('DELETE FROM posts WHERE id = ?').run(Number(id));
   return info.changes > 0;
 }

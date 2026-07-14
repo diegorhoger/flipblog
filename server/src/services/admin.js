@@ -6,6 +6,25 @@ export function getAdminByUsername(username) {
   return getDb().prepare('SELECT * FROM admin WHERE username = ?').get(String(username));
 }
 
+export function getUserById(id) {
+  return getDb().prepare('SELECT * FROM admin WHERE id = ?').get(Number(id));
+}
+
+export async function verifyUserPassword(id, password) {
+  const user = getUserById(id);
+  if (!user) return false;
+  return verifyPassword(password, user.password_hash);
+}
+
+export async function updatePassword(id, password) {
+  const hash = await hashPassword(password);
+  getDb().prepare('UPDATE admin SET password_hash = ? WHERE id = ?').run(hash, Number(id));
+}
+
+export function setAvatar(id, url) {
+  getDb().prepare('UPDATE admin SET avatar = ? WHERE id = ?').run(url ?? null, Number(id));
+}
+
 export async function authenticate(username, password) {
   const admin = getAdminByUsername(username);
   if (!admin) return false;

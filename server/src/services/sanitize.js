@@ -21,7 +21,7 @@ const CONTENT_OPTIONS = {
     },
   },
   allowedSchemes: ['http', 'https', 'mailto', 'data'],
-  allowedSchemesByTag: { img: ['http', 'https', 'data'] },
+  allowedSchemesByTag: { img: ['http', 'https', 'data', 'relative'] },
   transformTags: {
     a: sanitizeHtml.simpleTransform('a', { target: '_blank', rel: 'noopener noreferrer' }),
   },

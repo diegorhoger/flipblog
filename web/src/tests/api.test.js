@@ -63,6 +63,18 @@ describe('api client', () => {
     expect(init.body).toBeInstanceOf(FormData);
   });
 
+  it('uploadAvatar posts FormData to /api/auth/avatar', async () => {
+    const fetchMock = fakeFetch({ avatar: '/uploads/x.png' }, { status: 200 });
+    vi.stubGlobal('fetch', fetchMock);
+    const { api } = await import('../lib/api.js');
+    const file = new File(['x'], 'x.png', { type: 'image/png' });
+    const res = await api.uploadAvatar(file);
+    expect(res.data.avatar).toBe('/uploads/x.png');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/auth/avatar');
+    expect(init.body).toBeInstanceOf(FormData);
+  });
+
   it('register posts username, password and role', async () => {
     const fetchMock = fakeFetch({ user: { username: 'ana', role: 'author' } }, { status: 201 });
     vi.stubGlobal('fetch', fetchMock);
@@ -74,5 +86,17 @@ describe('api client', () => {
     expect(url).toBe('/api/auth/register');
     expect(init.method).toBe('POST');
     expect(JSON.parse(init.body)).toEqual({ username: 'ana', password: 'sup3rsecret', role: 'author' });
+  });
+
+  it('changePassword posts current and new passwords', async () => {
+    const fetchMock = fakeFetch({ ok: true }, { status: 200 });
+    vi.stubGlobal('fetch', fetchMock);
+    const { api } = await import('../lib/api.js');
+    const res = await api.changePassword('oldpw', 'newsup3rsecret');
+    expect(res.status).toBe(200);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/auth/change-password');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({ currentPassword: 'oldpw', newPassword: 'newsup3rsecret' });
   });
 });

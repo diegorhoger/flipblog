@@ -10,6 +10,12 @@ export async function renderHeader(container) {
   const authed = me.ok && me.data?.user;
   const isAdmin = authed?.role === 'admin';
 
+  const avatarEl = authed
+    ? me.data.user.avatar
+      ? h('img', { class: 'avatar', src: me.data.user.avatar, alt: 'avatar' })
+      : h('span', { class: 'avatar avatar-fallback' }, (me.data.user.username || '?').charAt(0).toUpperCase())
+    : null;
+
   const nav = h(
     'nav',
     { class: 'nav' },
@@ -18,7 +24,9 @@ export async function renderHeader(container) {
       ? h(
           'span',
           { class: 'nav-group' },
+          avatarEl,
           link('Painel', '/admin'),
+          link('Perfil', '/profile'),
           isAdmin ? link('Registrar', '/register') : null
         )
       : link('Entrar', '/login')

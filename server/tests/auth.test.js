@@ -90,3 +90,86 @@ test('unauthenticated registration is rejected', async () => {
     .send({ username: 'ghost', password: 'sup3rsecret' });
   assert.equal(res.status, 401);
 });
+
+test('me returns username, role and created_at', async () => {
+  const agent = await authedAgent();
+  const me = await agent.get('/api/auth/me');
+  assert.equal(me.status, 200);
+  assert.equal(me.body.user.username, ADMIN.username);
+  assert.equal(me.body.user.role, 'admin');
+  assert.ok(me.body.user.created_at);
+});
+
+test('user can change their own password', async () => {
+  const created = await createUser({ username: `pw_${Date.now()}`, password: 'initialpw1', role: 'author' });
+  const agent = request.agent(app);
+  const login = await agent.post('/api/auth/login').send({ username: created.username, password: 'initialpw1' });
+  assert.equal(login.status, 200);
+
+  const change = await agent
+    .post('/api/auth/change-password')
+    .send({ currentPassword: 'initialpw1', newPassword: 'brandnew99' });
+  assert.equal(change.status, 200);
+
+  const oldLogin = await request(app)
+    .post('/api/auth/login')
+    .send({ username: created.username, password: 'initialpw1' });
+  assert.equal(oldLogin.status, 401);
+
+  const newLogin = await request(app)
+    .post('/api/auth/login')
+    .send({ username: created.username, password: 'brandnew99' });
+  assert.equal(newLogin.status, 200);
+});
+
+test('change-password rejects a wrong current password', async () => {
+  const created = await createUser({ username: `pw2_${Date.now()}`, password: 'initialpw1', role: 'author' });
+  const agent = request.agent(app);
+  await agent.post('/api/auth/login').send({ username: created.username, password: 'initialpw1' });
+  const change = await agent
+    .post('/api/auth/change-password')
+    .send({ currentPassword: 'wrongpw', newPassword: 'brandnew99' });
+  assert.equal(change.status, 401);
+});
+
+test('change-password rejects a weak new password', async () => {
+  const created = await createUser({ username: `pw3_${Date.now()}`, password: 'initialpw1', role: 'author' });
+  const agent = request.agent(app);
+  await agent.post('/api/auth/login').send({ username: created.username, password: 'initialpw1' });
+  const change = await agent
+    .post('/api/auth/change-password')
+    .send({ currentPassword: 'initialpw1', newPassword: 'short' });
+  assert.equal(change.status, 400);
+});
+
+test('change-password requires authentication', async () => {
+  const res = await request(app)
+    .post('/api/auth/change-password')
+    .send({ currentPassword: 'x', newPassword: 'brandnew99' });
+  assert.equal(res.status, 401);
+});
+
+const PNG_1X1 = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMCAQDJ/PWeAAAAAElFTkSuQmCC',
+  'base64'
+);
+
+test('authenticated user can upload a profile picture', async () => {
+  const agent = await authedAgent();
+  const res = await agent.post('/api/auth/avatar').attach('file', PNG_1X1, 'pic.png');
+  assert.equal(res.status, 200);
+  assert.match(res.body.avatar, /^\/uploads\/.+/);
+  const me = await agent.get('/api/auth/me');
+  assert.equal(me.body.user.avatar, res.body.avatar);
+});
+
+test('avatar upload rejects unsupported file types', async () => {
+  const agent = await authedAgent();
+  const res = await agent.post('/api/auth/avatar').attach('file', Buffer.from('hello'), 'doc.txt');
+  assert.equal(res.status, 415);
+});
+
+test('avatar upload requires authentication', async () => {
+  const res = await request(app).post('/api/auth/avatar').attach('file', PNG_1X1, 'pic.png');
+  assert.equal(res.status, 401);
+});

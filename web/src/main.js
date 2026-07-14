@@ -9,6 +9,7 @@ import * as home from './pages/home.js';
 import * as reader from './pages/reader.js';
 import * as login from './pages/login.js';
 import * as register from './pages/register.js';
+import * as profile from './pages/profile.js';
 import * as admin from './pages/admin.js';
 
 const routes = [
@@ -16,6 +17,7 @@ const routes = [
   { pattern: '/read/:slug', view: reader.render },
   { pattern: '/login', view: login.render },
   { pattern: '/register', view: register.render },
+  { pattern: '/profile', view: profile.render },
   { pattern: '/admin', view: admin.renderDashboard },
   { pattern: '/admin/edit', view: admin.renderEditor },
   { pattern: '/admin/edit/:id', view: admin.renderEditor },
