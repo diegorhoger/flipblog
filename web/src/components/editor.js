@@ -3,6 +3,7 @@ import 'quill/dist/quill.snow.css';
 import { h } from '../lib/dom.js';
 import { api } from '../lib/api.js';
 import { toast } from '../lib/toast.js';
+import { openImageAltModal } from './imageAltModal.js';
 
 const Delta = Quill.import('delta');
 const BlockEmbed = Quill.import('blots/block/embed');
@@ -77,30 +78,23 @@ export function createEditor({ initialHTML = '' } = {}) {
 
   if (initialHTML) quill.clipboard.dangerouslyPasteHTML(initialHTML);
 
-  // Ask the author for an alt text. The result has three outcomes:
+  // Ask the author for an alt text through an accessible modal. The result has
+  // three outcomes:
   //   - canceled: the author dismissed the dialog (insert nothing)
-  //   - decorative: an empty value, meaning "no semantic content" -> alt=""
-  //   - described: a real description, used verbatim as alt text
+  //   - decorative: { alt: '' }, a deliberate empty alt for no semantic content
+  //   - described: { alt: '<text>' }, a real description used verbatim as alt
   // Quill's Image blot drops empty attributes, so decorative images must carry
   // an explicit alt="" (a missing alt attribute has a different meaning and hurts
   // accessibility scanning tools).
-  function promptAltText() {
-    const value = window.prompt(
-      'Texto alternativo (alt) da imagem.\n' +
-        'Descreva brevemente o que a imagem mostra e sua função no conteúdo. ' +
-        'Não use palavras-chave para SEO — escreva para pessoas que não veem a imagem. ' +
-        'Deixe em branco apenas se a imagem for puramente decorativa. Cancelar aborta a inserção.',
-      ''
-    );
-    if (value == null) return { canceled: true };
-    const trimmed = value.trim();
-    return trimmed ? { alt: trimmed } : { alt: '' };
+  function promptAltText(file) {
+    return openImageAltModal(file);
   }
 
   async function uploadAndInsert(file, index) {
-    // Prompt for alt text BEFORE uploading: a canceled prompt must not upload or
-    // insert anything. This also avoids uploading when the author aborts.
-    const altResult = promptAltText();
+    // Prompt for alt text BEFORE uploading: a canceled or dismissed modal must
+    // not upload or insert anything. This also avoids orphaned uploads when the
+    // author aborts.
+    const altResult = await promptAltText(file);
     if (altResult.canceled) return;
 
     const res = await api.upload(file);
