@@ -4,6 +4,7 @@ import { signJwt } from '../auth/jwt.js';
 import { validateBody, loginSchema, registerSchema, changePasswordSchema } from '../middleware/validate.js';
 import { requireAuth, requireRole } from '../middleware/requireAuth.js';
 import { upload, uploadErrorHandler } from '../middleware/upload.js';
+import { deleteUnreferencedUploads } from '../services/uploadRefs.js';
 import {
   authenticate,
   createUser,
@@ -62,17 +63,58 @@ router.get('/me', requireAuth, (req, res) => {
 });
 
 // Authenticated users upload/change their own profile picture (any role).
+//
+// Middleware order matters: `upload.single('file')` runs before this handler and
+// multer's disk storage has already written the new file to `config.uploadsDir`
+// by the time we get here. That physical file therefore exists regardless of
+// whether the database update below succeeds, which is exactly what the two
+// cleanup paths account for:
+//   * On success we best-effort delete the *previous* avatar file if nothing
+//     else references it (a replacement frees the old file's disk space).
+//   * On failure we best-effort delete the *new* file we just accepted so a
+//     rejected update never leaves an orphan behind, while the previous avatar
+//     is left completely untouched.
 router.post(
   '/avatar',
   requireAuth,
   upload.single('file'),
   async (req, res, next) => {
+    if (!req.file) return res.status(400).json({ error: 'no_file' });
+    const url = `${config.uploadsUrl}/${req.file.filename}`;
+    let committed = false;
     try {
-      if (!req.file) return res.status(400).json({ error: 'no_file' });
-      const url = `${config.uploadsUrl}/${req.file.filename}`;
+      // Capture the previous avatar URL before overwriting the column so we can
+      // consider it for cleanup once the new value is safely persisted.
+      const current = getUserById(req.user.sub);
+      const previousUrl = current ? current.avatar : null;
+
+      // Database first: only once the column update commits do we treat the new
+      // file as the live avatar and the old one as a cleanup candidate.
       setAvatar(req.user.sub, url);
+      committed = true;
+
+      // Best-effort cleanup of the replaced avatar. This runs strictly AFTER the
+      // committed update, so the current user's row already holds the new URL and
+      // no longer references `previousUrl`. deleteUnreferencedUploads() reuses the
+      // shared path-safety + reference checks from PR #4: it deletes the old file
+      // only when it is a managed `/uploads/<file>` URL, is not referenced by any
+      // post, and is not another user's avatar. External/malformed/traversal URLs
+      // map to no managed file and are ignored; a missing file counts as already
+      // cleaned; any filesystem failure is swallowed and logged (without paths).
+      // No `excludeUserId` is needed: because the update already committed, the
+      // old URL is absent from this user's row, so an exact-match avatar hit can
+      // only mean *another* user still uses the file.
+      if (previousUrl && previousUrl !== url) {
+        deleteUnreferencedUploads([previousUrl]);
+      }
+
       res.json({ avatar: url });
     } catch (err) {
+      // The new file was written by multer before this handler ran. If the
+      // update did not commit, remove that orphaned new file best-effort and
+      // leave the previous avatar untouched, then preserve the original error
+      // behavior. `committed` guards against ever deleting a now-live avatar.
+      if (!committed) deleteUnreferencedUploads([url]);
       next(err);
     }
   },
