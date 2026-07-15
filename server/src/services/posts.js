@@ -1,6 +1,7 @@
 import { getDb } from '../db.js';
 import { splitIntoPages, countPages } from './paginate.js';
 import { sanitizeContent, sanitizeText } from './sanitize.js';
+import { extractUploadUrls, diffRemovedUploads, deleteUnreferencedUploads } from './uploadRefs.js';
 
 export function slugify(input) {
   const base = String(input || '')
@@ -203,6 +204,14 @@ export function updatePost(id, input = {}, actor = null) {
      WHERE id=?`
   ).run(slug, title, author, excerpt, cover, content, status, now, existing.id);
 
+  // Best-effort upload cleanup AFTER the database change has committed. Any
+  // failure here must never fail an otherwise successful update, so
+  // deleteUnreferencedUploads swallows and logs its own errors. Only uploads
+  // that were dropped from this post's content and are not referenced by any
+  // other post are removed.
+  const removed = diffRemovedUploads(existing.content, content);
+  deleteUnreferencedUploads(removed);
+
   return getPostById(existing.id, actor);
 }
 
@@ -211,6 +220,13 @@ export function deletePost(id, actor = null) {
   const existing = db.prepare('SELECT * FROM posts WHERE id = ?').get(Number(id));
   if (!existing) return false;
   assertCanManage(existing, actor);
+  // Capture referenced uploads BEFORE the row disappears, then delete the row.
+  const uploads = extractUploadUrls(existing.content);
   const info = db.prepare('DELETE FROM posts WHERE id = ?').run(Number(id));
+  if (info.changes > 0) {
+    // Best-effort cleanup after a committed deletion: remove only uploads no
+    // other post still references. Failures are logged, never thrown.
+    deleteUnreferencedUploads(uploads);
+  }
   return info.changes > 0;
 }
