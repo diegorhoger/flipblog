@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { config } from '../src/config.js';
 import { createPost, updatePost, deletePost } from '../src/services/posts.js';
+import { setAvatar, seedAdminIfMissing } from '../src/services/admin.js';
 import {
   extractUploadUrls,
   uploadUrlToPath,
@@ -107,6 +108,49 @@ test('external image URLs are ignored by extraction and cleanup', () => {
   // the external URL.
   updatePost(post.id, { content: '<p>clean</p>' }, ADMIN);
   assert.equal(existsSync(a.filePath), false);
+});
+
+test('a post update does not delete a file used as a profile avatar', async () => {
+  const seeded = await seedAdminIfMissing();
+  const a = makeUpload();
+  setAvatar(seeded.id, a.url); // the file is now a profile avatar
+  const post = createPost({ title: 'GC avatar update', content: img(a.url) }, ADMIN);
+
+  updatePost(post.id, { content: '<p>image removed from the post</p>' }, ADMIN);
+  assert.ok(existsSync(a.filePath), 'a file used as an avatar must not be deleted');
+});
+
+test('a post deletion does not delete a file used as a profile avatar', async () => {
+  const seeded = await seedAdminIfMissing();
+  const a = makeUpload();
+  setAvatar(seeded.id, a.url);
+  const post = createPost({ title: 'GC avatar delete', content: img(a.url) }, ADMIN);
+
+  deletePost(post.id, ADMIN);
+  assert.ok(existsSync(a.filePath), 'avatar-referenced file must survive post deletion');
+});
+
+test('a file becomes eligible for cleanup once no avatar references it', async () => {
+  const seeded = await seedAdminIfMissing();
+  const a = makeUpload();
+  setAvatar(seeded.id, a.url);
+  const post = createPost({ title: 'GC avatar cleared', content: img(a.url) }, ADMIN);
+
+  // Clear the avatar first, then drop the image from the post: with neither a
+  // post nor an avatar referencing it, the file is finally collectible.
+  setAvatar(seeded.id, null);
+  updatePost(post.id, { content: '<p>gone</p>' }, ADMIN);
+  assert.equal(existsSync(a.filePath), false, 'no post and no avatar reference -> deleted');
+});
+
+test('query and fragment URL variants are rejected', () => {
+  assert.equal(uploadUrlToPath('/uploads/a.png?v=2'), null);
+  assert.equal(uploadUrlToPath('/uploads/a.png#frag'), null);
+  assert.equal(uploadUrlToPath('/uploads/a.png?'), null);
+  assert.equal(uploadUrlToPath('/uploads/a.png#'), null);
+
+  const html = '<p><img src="/uploads/a.png?v=2"><img src="/uploads/b.png#x"></p>';
+  assert.deepEqual(extractUploadUrls(html), []);
 });
 
 test('path traversal attempts are ignored', () => {

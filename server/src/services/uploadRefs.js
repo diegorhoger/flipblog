@@ -30,13 +30,16 @@ export function uploadUrlToPath(url) {
   if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return null;
   // Reject protocol-relative URLs (//host/…).
   if (url.startsWith('//')) return null;
+  // FlipBlog only ever generates bare `/uploads/<filename>` URLs. Reject query
+  // strings and fragments outright so a single file can never masquerade as two
+  // distinct references (e.g. `/uploads/a.png` vs `/uploads/a.png?v=2`), which
+  // would otherwise let one variant be deleted while another still "references"
+  // the same file.
+  if (url.includes('?') || url.includes('#')) return null;
   // Must be a relative URL under the uploads prefix.
   if (!url.startsWith(UPLOADS_PREFIX)) return null;
 
-  // Drop any query string / fragment before resolving the filename.
-  let rel = url.slice(UPLOADS_PREFIX.length);
-  const cut = rel.search(/[?#]/);
-  if (cut !== -1) rel = rel.slice(0, cut);
+  const rel = url.slice(UPLOADS_PREFIX.length);
   if (rel.length === 0) return null;
 
   // Decode percent-escapes (FlipBlog filenames never need them, but a hostile
@@ -99,19 +102,29 @@ function escapeLike(value) {
   return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 }
 
-// Whether any post still references the given upload URL. `excludeId` lets a
-// caller ignore a specific post (not required after a committed mutation, but
-// available for completeness/testing).
+// Whether the given upload URL is still referenced by anything FlipBlog manages.
+// Post content and profile avatars share the same uploads directory and URL
+// space, so an upload is "in use" if it appears in any post's content OR is set
+// as any user's avatar. Avatars are compared by exact equality because the
+// `admin.avatar` column stores a single URL (not HTML). `excludeId` ignores a
+// specific post (not required after a committed mutation, but available for
+// completeness/testing).
 export function isUploadReferenced(url, { excludeId = null } = {}) {
   if (typeof url !== 'string' || url.length === 0) return false;
   const db = getDb();
+
   const like = `%${escapeLike(url)}%`;
-  const row = db
+  const postReference = db
     .prepare(
       `SELECT 1 FROM posts WHERE content LIKE ? ESCAPE '\\' AND (? IS NULL OR id != ?) LIMIT 1`
     )
     .get(like, excludeId, excludeId);
-  return !!row;
+  if (postReference) return true;
+
+  // Never delete a file that is in use as a profile avatar, even though this PR
+  // does not otherwise manage avatar lifecycle.
+  const avatarReference = db.prepare('SELECT 1 FROM admin WHERE avatar = ? LIMIT 1').get(url);
+  return !!avatarReference;
 }
 
 // Best-effort logger for cleanup problems. Deliberately avoids dumping absolute
