@@ -744,3 +744,165 @@
 .editor-shell .ql-toolbar.ql-snow .ql-page-break:hover {
   border-color: var(--cor-primaria);
 }
+
+/* ---------- Alt-text audit ---------- */
+.alt-audit-intro {
+  margin: 24px 0 12px;
+}
+
+.alt-audit-intro h1 {
+  margin-bottom: 8px;
+}
+
+.alt-audit-legend {
+  border: 1px solid var(--cor-borda);
+  border-radius: var(--raio-sm, 10px);
+  padding: 14px 18px;
+  margin: 16px 0;
+  background: color-mix(in srgb, var(--cor-primaria) 5%, transparent);
+}
+
+.alt-audit-legend-title {
+  font-size: 1rem;
+  margin: 0 0 10px;
+}
+
+.alt-audit-legend-list {
+  margin: 0;
+  display: grid;
+  gap: 4px 14px;
+}
+
+.alt-audit-legend-term {
+  font-weight: 700;
+  margin-top: 8px;
+}
+
+.alt-audit-legend-list dd {
+  margin: 0 0 6px;
+  font-size: 0.9rem;
+}
+
+.alt-audit-totals {
+  font-weight: 600;
+  margin: 12px 0;
+}
+
+.alt-audit-posts {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.alt-audit-post {
+  border: 1px solid var(--cor-borda);
+  border-radius: var(--raio-sm, 10px);
+  padding: 16px 18px;
+}
+
+.alt-audit-post-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.alt-audit-post-title {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.alt-audit-post-summary {
+  margin: 2px 0 10px;
+  font-size: 0.85rem;
+}
+
+.alt-audit-findings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.alt-audit-finding {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px;
+  border: 1px solid var(--cor-borda);
+  border-radius: var(--raio-sm, 8px);
+  background: var(--cor-fundo, #f9fafb);
+}
+
+.alt-audit-thumb {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex: 0 0 auto;
+  background: color-mix(in srgb, var(--cor-texto-suave) 12%, transparent);
+}
+
+.alt-audit-finding-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.alt-audit-finding-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.alt-state {
+  font-size: 0.85rem;
+  color: var(--cor-texto-suave);
+}
+
+.alt-value {
+  color: var(--cor-texto);
+  font-weight: 600;
+}
+
+.alt-audit-src {
+  font-size: 0.85rem;
+  word-break: break-all;
+}
+
+.alt-audit-src-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+}
+
+.alt-audit-detail {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+}
+
+.badge-alt-missing {
+  background: color-mix(in srgb, var(--cor-perigo) 18%, transparent);
+  color: var(--cor-perigo);
+}
+
+.badge-alt-empty {
+  background: color-mix(in srgb, var(--cor-texto-suave) 22%, transparent);
+  color: var(--cor-texto-suave);
+}
+
+.badge-alt-placeholder {
+  background: color-mix(in srgb, #b45309 20%, transparent);
+  color: #b45309;
+}
+
+.alt-audit-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin: 24px 0;
+}

@@ -11,7 +11,7 @@ import * as login from './pages/login.js';
 import * as register from './pages/register.js';
 import * as profile from './pages/profile.js';
 import * as admin from './pages/admin.js';
-
+import * as altAudit from './pages/altAudit.js';
 const routes = [
   { pattern: '/', view: home.render },
   { pattern: '/read/:slug', view: reader.render },
@@ -21,6 +21,7 @@ const routes = [
   { pattern: '/admin', view: admin.renderDashboard },
   { pattern: '/admin/edit', view: admin.renderEditor },
   { pattern: '/admin/edit/:id', view: admin.renderEditor },
+  { pattern: '/admin/alt-audit', view: altAudit.render },
   { pattern: '*', view: home.render },
 ];
 
