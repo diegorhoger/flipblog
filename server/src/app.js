@@ -58,6 +58,10 @@ export function createApp() {
   //   * Known, client-facing errors (ApiError): validation, auth, lookup and
   //     conflict problems. These carry an explicit status + a stable, safe code
   //     that we surface as-is (with optional validation `details`).
+  //   * Client request-parsing errors raised by `express.json()` before any
+  //     route runs: malformed JSON and oversized bodies. These are bad requests,
+  //     not server faults, so they map to fixed safe codes (400/413) — never the
+  //     parser's message or the offending body.
   //   * Everything else: unexpected application/database failures (raw Errors,
   //     SQLite exceptions, filesystem errors, bugs). These are logged
   //     server-side and returned as a generic 500 so we never leak the
@@ -70,6 +74,13 @@ export function createApp() {
       const body = { error: err.code };
       if (err.details !== undefined) body.details = err.details;
       return res.status(err.status).json(body);
+    }
+    // body-parser (express.json) surfaces client-input problems via `err.type`.
+    if (err?.type === 'entity.parse.failed') {
+      return res.status(400).json({ error: 'invalid_json' });
+    }
+    if (err?.type === 'entity.too.large') {
+      return res.status(413).json({ error: 'payload_too_large' });
     }
     console.error(err);
     res.status(500).json({ error: 'internal_error' });

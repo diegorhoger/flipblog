@@ -70,6 +70,37 @@ test('an unexpected route error surfaces as a generic 500 without leaking intern
   }
 });
 
+// --- Request body-parsing failures are client errors, not 500s ---
+
+test('malformed JSON is a 400 with a stable safe code and no leaked body/message', async () => {
+  const badBody = '{"username": "abc", "oops"';
+  const res = await request(app)
+    .post('/api/auth/login')
+    .set('Content-Type', 'application/json')
+    .send(badBody);
+  assert.equal(res.status, 400);
+  assert.equal(res.body.error, 'invalid_json');
+  const serialized = JSON.stringify(res.body);
+  assert.ok(!serialized.includes('oops'), 'must not echo the malformed request body');
+  assert.ok(!/Unexpected|position|in JSON at/i.test(serialized), 'must not leak the parser message');
+  assert.ok(!/\bat \w+/.test(serialized), 'must not leak a stack trace frame');
+});
+
+test('an oversized JSON body is a 413 with a stable safe code and no leaked content', async () => {
+  const marker = 'OVERSIZE_MARKER';
+  // express.json is capped at 2mb; exceed it with valid JSON to trip the limit.
+  const huge = marker + 'x'.repeat(2 * 1024 * 1024 + 1024);
+  const res = await request(app)
+    .post('/api/auth/login')
+    .set('Content-Type', 'application/json')
+    .send(JSON.stringify({ username: huge, password: 'x' }));
+  assert.equal(res.status, 413);
+  assert.equal(res.body.error, 'payload_too_large');
+  const serialized = JSON.stringify(res.body);
+  assert.ok(!serialized.includes(marker), 'must not echo the oversized request body');
+  assert.ok(!/limit|entity|too large/i.test(serialized), 'must not leak the parser message');
+});
+
 // --- Upload validation failures keep their precise 4xx status ---
 
 test('an unsupported file type is rejected with 415 (multer file rejection)', async () => {
