@@ -254,7 +254,8 @@ describe('editor image operation queue', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     api.upload
       .mockImplementationOnce(() => {
-        throw new Error('unexpected');
+        // A message that could leak sensitive details (URLs, responses, filenames).
+        throw new Error('boom-SECRET-upload-failed-for-/uploads/secret.png');
       })
       .mockResolvedValue({ ok: true, data: { url: '/uploads/after.png' } });
 
@@ -266,6 +267,12 @@ describe('editor image operation queue', () => {
     await confirmActive({ alt: 'Boom' }); // upload throws synchronously
     await flush();
     expect(errorSpy).toHaveBeenCalled(); // logged at the queue boundary
+    // The logged message must be a fixed, non-sensitive string and must NOT
+    // contain the arbitrary exception text (which could leak URLs, server
+    // responses, or filenames).
+    const logged = errorSpy.mock.calls.map((args) => args.join(' ')).join(' ');
+    expect(logged).toContain('[editor] unexpected image insertion error');
+    expect(logged).not.toContain('boom-SECRET');
     expect(dialogs()).toHaveLength(1); // queue kept going
 
     await confirmActive({ alt: 'Recovered' });
@@ -275,6 +282,39 @@ describe('editor image operation queue', () => {
     expect(html).not.toContain('throws.png');
     expect(html).toContain('<img src="/uploads/after.png" alt="Recovered">');
     errorSpy.mockRestore();
+  });
+
+  it('captures the anchor at submission time when no selection exists', async () => {
+    const editor = createEditor();
+    api.upload.mockImplementation((f) => Promise.resolve({ ok: true, data: { url: '/uploads/' + f.name } }));
+
+    // Simulate an absent selection: handlers pass undefined as the anchor. The
+    // queue must capture getLength() at submission, not at execution.
+    toolbarPick(editor, file('first-no-sel.png'));
+    await flush();
+    expect(dialogs()).toHaveLength(1);
+
+    // Submit the second while the first is still open (doc unchanged so far).
+    toolbarPick(editor, file('second-no-sel.png'));
+    await flush();
+    expect(dialogs()).toHaveLength(1);
+
+    // First confirmed -> doc grows before the second executes.
+    await confirmActive({ alt: 'First' });
+    await flush();
+    expect(dialogs()).toHaveLength(1); // second proceeds
+
+    await confirmActive({ alt: 'Second' });
+    await flush();
+
+    // Both inserted; order follows submission, and the second did not re-resolve
+    // its anchor after the first modified the document (it uses the captured
+    // value plus the monotonic high-water mark).
+    const html = editor.getContent();
+    expect(html).toContain('alt="First"');
+    expect(html).toContain('alt="Second"');
+    expect(html.indexOf('First')).toBeLessThan(html.indexOf('Second'));
+    expect(api.upload).toHaveBeenCalledTimes(2);
   });
 
   it('does not upload any queued file before its own modal is confirmed', async () => {

@@ -124,7 +124,13 @@ export function createEditor({ initialHTML = '' } = {}) {
     const done = new Promise((r) => {
       resolve = r;
     });
-    imageQueue.push({ file, anchor, resolve });
+    // Normalize the anchor at SUBMISSION time. A null/undefined selection means
+    // "append at the end of the document right now"; resolving getLength() here
+    // (not later during the drain) makes it a true captured submission anchor,
+    // so the rule stays: anchors are fixed points, not values recomputed after
+    // earlier queued operations may have already changed the document.
+    const capturedAnchor = typeof anchor === 'number' ? anchor : quill.getLength();
+    imageQueue.push({ file, anchor: capturedAnchor, resolve });
     drainImageQueue();
     return done;
   }
@@ -146,10 +152,12 @@ export function createEditor({ initialHTML = '' } = {}) {
           result = await runImageOp(op);
         } catch (err) {
           // Queue-boundary safety net: an unexpected error in one operation must
-          // never stall the queue. Log a terse, non-sensitive message and move
-          // on so later queued operations still run.
+          // never stall the queue. Log a fixed, non-sensitive message and move
+          // on so later queued operations still run. We deliberately do NOT log
+          // err.message, which can leak request URLs, server responses, filenames,
+          // or other unexpected details.
           // eslint-disable-next-line no-console
-          console.error('[editor] image insertion failed:', err?.message || 'unknown_error');
+          console.error('[editor] unexpected image insertion error');
           result = 'error';
         } finally {
           op.resolve(result);
@@ -176,9 +184,10 @@ export function createEditor({ initialHTML = '' } = {}) {
 
     // Insert the image, then apply alt via formatText. Quill normalizes empty
     // attributes out of a Delta insert, so setting alt afterwards is the only
-    // way to preserve a deliberately empty alt="" for decorative images.
-    const anchor = typeof op.anchor === 'number' ? op.anchor : quill.getLength();
-    const insertIndex = lastInsertEnd == null ? anchor : Math.max(anchor, lastInsertEnd);
+    // way to preserve a deliberately empty alt="" for decorative images. The
+    // anchor was normalized to a number at enqueue time (see enqueueImageOp),
+    // so op.anchor is always a number here.
+    const insertIndex = lastInsertEnd == null ? op.anchor : Math.max(op.anchor, lastInsertEnd);
     quill.updateContents(new Delta().retain(insertIndex).insert({ image: res.data.url }), 'user');
     quill.formatText(insertIndex, 1, 'alt', altResult.alt, 'user');
     quill.setSelection(insertIndex + 1, 'user');
