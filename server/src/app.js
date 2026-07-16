@@ -6,6 +6,7 @@ import { getDb } from './db.js';
 import authRoutes from './routes/auth.js';
 import postRoutes from './routes/posts.js';
 import uploadRoutes from './routes/uploads.js';
+import auditRoutes from './routes/audit.js';
 
 function parseCookies(req, res, next) {
   req.cookies = {};
@@ -39,6 +40,7 @@ export function createApp() {
   app.use('/api/auth', authRoutes);
   app.use('/api/posts', postRoutes);
   app.use('/api/uploads', uploadRoutes);
+  app.use('/api/audit', auditRoutes);
 
   app.use(express.static(config.publicDir));
 

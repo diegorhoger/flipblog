@@ -52,7 +52,12 @@ export async function renderDashboard({ view }) {
         'div',
         { class: 'section-title' },
         h('h2', null, 'Painel de publicações'),
-        h('button', { class: 'btn btn-accent', onclick: () => navigate('/admin/edit') }, '+ Nova publicação')
+        h(
+          'div',
+          { class: 'row' },
+          h('button', { class: 'btn btn-ghost', onclick: () => navigate('/admin/alt-audit') }, 'Auditar alt-text'),
+          h('button', { class: 'btn btn-accent', onclick: () => navigate('/admin/edit') }, '+ Nova publicação')
+        )
       ),
       data.items && data.items.length
         ? table

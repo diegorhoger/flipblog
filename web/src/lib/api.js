@@ -26,6 +26,8 @@ export const api = {
   getPosts: (params = {}) =>
     request('GET', '/api/posts?' + new URLSearchParams(params).toString()),
   getPost: (slug) => request('GET', `/api/posts/${encodeURIComponent(slug)}`),
+  auditAltText: (params = {}) =>
+    request('GET', '/api/audit/alt-text?' + new URLSearchParams(params).toString()),
   getPostById: (id) => request('GET', `/api/posts/id/${id}`),
   createPost: (payload) => request('POST', '/api/posts', { body: payload }),
   updatePost: (id, payload) => request('PUT', `/api/posts/${id}`, { body: payload }),
