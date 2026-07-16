@@ -90,38 +90,100 @@ export function createEditor({ initialHTML = '' } = {}) {
     return openImageAltModal(file);
   }
 
-  async function uploadAndInsert(file, index) {
-    // Prompt for alt text BEFORE uploading: a canceled or dismissed modal must
-    // not upload or insert anything. This also avoids orphaned uploads when the
-    // author aborts.
-    const altResult = await promptAltText(file);
-    if (altResult.canceled) return false;
+  // ---- Serial image-insertion queue ---------------------------------------
+  //
+  // Toolbar file selection, paste, and drag-and-drop all funnel through ONE
+  // FIFO queue. Only a single alt-text modal and a single insertion may be
+  // active at a time, so overlapping pastes/drops can never open two dialogs or
+  // interleave their inserts. Operations run in submission order; files within a
+  // batch keep their order because they are enqueued together, front to back.
+  //
+  // INSERTION POSITION RULE (deterministic, documented, and tested):
+  //   * Each operation captures the editor caret index at *submission* time as
+  //     its `anchor`. Anchors are treated as fixed submission points; we do NOT
+  //     rebase them to chase a cursor that moves while the queue drains.
+  //   * Insertion is monotonic within a continuous drain: an operation inserts
+  //     at `max(anchor, endOfPreviousInsert)`. This guarantees a later image can
+  //     never overwrite or reverse an earlier one, and that a batch lands as a
+  //     consecutive, correctly ordered run.
+  //   * The high-water mark resets when the queue goes idle, so a subsequent,
+  //     independent action honors its own anchor. In normal use each insert also
+  //     advances the live caret (setSelection), so separate sequential actions
+  //     already anchor after prior inserts.
+  const imageQueue = [];
+  let draining = false;
+  // End index (exclusive) of the last insert in the current drain, or null when
+  // the queue is idle.
+  let lastInsertEnd = null;
 
-    const res = await api.upload(file);
-    if (!res.ok) {
-      toast('Falha ao enviar a imagem: ' + (res.data?.error || res.status), 'error');
-      return false;
-    }
-    // Insert the image first, then apply alt via formatText. Quill normalizes
-    // empty attributes out of a Delta insert, so setting alt afterwards is the
-    // only way to preserve a deliberately empty alt="" for decorative images.
-    const safeIndex = typeof index === 'number' ? index : quill.getLength();
-    quill.updateContents(new Delta().retain(safeIndex).insert({ image: res.data.url }), 'user');
-    quill.formatText(safeIndex, 1, 'alt', altResult.alt, 'user');
-    quill.setSelection(safeIndex + 1, 'user');
-    return true;
+  // Enqueue a single image operation. Returns a promise resolving to the
+  // operation outcome ('inserted' | 'canceled' | 'failed' | 'error') once the
+  // operation has fully finished, so callers/tests can await a specific submit.
+  function enqueueImageOp(file, anchor) {
+    let resolve;
+    const done = new Promise((r) => {
+      resolve = r;
+    });
+    imageQueue.push({ file, anchor, resolve });
+    drainImageQueue();
+    return done;
   }
 
-  // Insert several image files in order, prompting for alt text for each one.
-  // Images are uploaded and inserted one at a time, so the insertion point stays
-  // correct even if the author cancels or an upload fails partway through:
-  // only images that are actually inserted advance the running index.
-  async function insertImages(files, startIndex) {
-    let index = typeof startIndex === 'number' ? startIndex : quill.getLength();
-    for (const file of files) {
-      const inserted = await uploadAndInsert(file, index);
-      if (inserted) index += 1;
+  // Enqueue a batch (paste/drop) in order under a single shared anchor. Monotonic
+  // insertion keeps the batch consecutive and ordered.
+  function enqueueImages(files, anchor) {
+    return Promise.all(files.map((file) => enqueueImageOp(file, anchor)));
+  }
+
+  async function drainImageQueue() {
+    if (draining) return;
+    draining = true;
+    try {
+      while (imageQueue.length) {
+        const op = imageQueue.shift();
+        let result = 'error';
+        try {
+          result = await runImageOp(op);
+        } catch (err) {
+          // Queue-boundary safety net: an unexpected error in one operation must
+          // never stall the queue. Log a terse, non-sensitive message and move
+          // on so later queued operations still run.
+          // eslint-disable-next-line no-console
+          console.error('[editor] image insertion failed:', err?.message || 'unknown_error');
+          result = 'error';
+        } finally {
+          op.resolve(result);
+        }
+      }
+    } finally {
+      draining = false;
+      lastInsertEnd = null;
     }
+  }
+
+  // Run one image operation: prompt (exactly one modal) -> upload -> insert.
+  // Prompting happens BEFORE uploading, so a canceled/dismissed modal uploads
+  // nothing. Returns the outcome; may throw, which the drainer tolerates.
+  async function runImageOp(op) {
+    const altResult = await promptAltText(op.file);
+    if (altResult.canceled) return 'canceled';
+
+    const res = await api.upload(op.file);
+    if (!res.ok) {
+      toast('Falha ao enviar a imagem: ' + (res.data?.error || res.status), 'error');
+      return 'failed';
+    }
+
+    // Insert the image, then apply alt via formatText. Quill normalizes empty
+    // attributes out of a Delta insert, so setting alt afterwards is the only
+    // way to preserve a deliberately empty alt="" for decorative images.
+    const anchor = typeof op.anchor === 'number' ? op.anchor : quill.getLength();
+    const insertIndex = lastInsertEnd == null ? anchor : Math.max(anchor, lastInsertEnd);
+    quill.updateContents(new Delta().retain(insertIndex).insert({ image: res.data.url }), 'user');
+    quill.formatText(insertIndex, 1, 'alt', altResult.alt, 'user');
+    quill.setSelection(insertIndex + 1, 'user');
+    lastInsertEnd = insertIndex + 1;
+    return 'inserted';
   }
 
   function insertImage() {
@@ -134,7 +196,13 @@ export function createEditor({ initialHTML = '' } = {}) {
       'change',
       () => {
         const file = input.files && input.files[0];
-        if (file) uploadAndInsert(file, quill.getSelection()?.index);
+        // Route through the shared queue so a toolbar pick serializes with any
+        // in-flight paste/drop instead of opening a second modal.
+        if (file) enqueueImageOp(file, quill.getSelection()?.index);
+        // Reset the value before removing so that, even if the element were
+        // reused, picking the same file again would still fire `change`. A fresh
+        // input is created on every toolbar click regardless.
+        input.value = '';
         cleanup();
       },
       { once: true }
@@ -165,28 +233,33 @@ export function createEditor({ initialHTML = '' } = {}) {
   }
 
   // Drag-and-drop and paste images directly into the editor. Every image file
-  // in the payload is inserted in order, each through its own alt-text modal.
+  // in the payload is enqueued in order; the shared queue guarantees a single
+  // modal/insertion at a time even across overlapping paste/drop events.
   quill.root.addEventListener('drop', (e) => {
     const files = [...(e.dataTransfer?.files || [])].filter((f) => f.type.startsWith('image/'));
     if (files.length === 0) return;
     e.preventDefault();
-    insertImages(files, quill.getSelection()?.index);
+    enqueueImages(files, quill.getSelection()?.index);
   });
   quill.root.addEventListener('paste', (e) => {
     const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
     if (files.length === 0) return;
     e.preventDefault();
-    insertImages(files, quill.getSelection()?.index);
+    enqueueImages(files, quill.getSelection()?.index);
   });
 
+  const VITEST = typeof process !== 'undefined' && process.env?.VITEST;
   return {
     element: shell,
     getContent: () => quill.getSemanticHTML(),
     getText: () => quill.getText(),
     focus: () => quill.focus(),
     // Test-only hooks so unit tests can exercise the alt-text flow without
-    // depending on jsdom drag-and-drop/paste event quirks. Not used in app code.
-    __test_uploadAndInsert: typeof process !== 'undefined' && process.env?.VITEST ? uploadAndInsert : undefined,
-    __test_insertImages: typeof process !== 'undefined' && process.env?.VITEST ? insertImages : undefined,
+    // depending on jsdom drag-and-drop/paste event quirks. Both submit through
+    // the same serial queue used by the real handlers. Not used in app code.
+    __test_uploadAndInsert: VITEST
+      ? (file, index) => enqueueImageOp(file, index).then((r) => r === 'inserted')
+      : undefined,
+    __test_insertImages: VITEST ? (files, index) => enqueueImages(files, index) : undefined,
   };
 }
