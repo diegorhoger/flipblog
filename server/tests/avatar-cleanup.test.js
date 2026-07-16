@@ -204,9 +204,11 @@ test('a failed database update cleans the newly uploaded file best-effort', asyn
   const before = listUploads();
   try {
     const res = await agent.post('/api/auth/avatar').attach('file', PNG_1X1, 'new.png');
-    // The route preserves its original error behavior: a thrown handler error is
-    // forwarded to uploadErrorHandler, which surfaces a 400 (not a success).
-    assert.equal(res.status, 400, 'a failed update preserves the original error behavior');
+    // A database failure is a server fault, not a bad request: the thrown handler
+    // error is forwarded past uploadErrorHandler to the central handler, which
+    // returns a generic 500 (never a misleading 400 that leaks the DB message).
+    assert.equal(res.status, 500, 'a failed update surfaces as an internal server error');
+    assert.equal(res.body.error, 'internal_error');
   } finally {
     db.exec('DROP TRIGGER fail_avatar_update');
   }
@@ -226,7 +228,7 @@ test('a failed database update leaves the previous avatar untouched', async () =
   db.exec("CREATE TEMP TRIGGER fail_avatar_update BEFORE UPDATE ON admin BEGIN SELECT RAISE(ABORT, 'boom'); END;");
   try {
     const res = await agent.post('/api/auth/avatar').attach('file', PNG_1X1, 'new.png');
-    assert.equal(res.status, 400);
+    assert.equal(res.status, 500);
   } finally {
     db.exec('DROP TRIGGER fail_avatar_update');
   }

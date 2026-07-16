@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from './config.js';
 import { getDb } from './db.js';
+import { ApiError } from './errors.js';
 import authRoutes from './routes/auth.js';
 import postRoutes from './routes/posts.js';
 import uploadRoutes from './routes/uploads.js';
@@ -52,12 +53,26 @@ export function createApp() {
     next();
   });
 
+  // Central error handler. It draws a hard line between two kinds of failure:
+  //
+  //   * Known, client-facing errors (ApiError): validation, auth, lookup and
+  //     conflict problems. These carry an explicit status + a stable, safe code
+  //     that we surface as-is (with optional validation `details`).
+  //   * Everything else: unexpected application/database failures (raw Errors,
+  //     SQLite exceptions, filesystem errors, bugs). These are logged
+  //     server-side and returned as a generic 500 so we never leak the
+  //     underlying message, stack trace, SQL text, filenames, or filesystem
+  //     paths to the client.
+  //
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => {
-    const status = err.status || 500;
-    const message = process.env.NODE_ENV === 'production' ? 'internal_error' : err.message || 'internal_error';
-    if (status >= 500) console.error(err);
-    res.status(status).json({ error: message });
+    if (err instanceof ApiError) {
+      const body = { error: err.code };
+      if (err.details !== undefined) body.details = err.details;
+      return res.status(err.status).json(body);
+    }
+    console.error(err);
+    res.status(500).json({ error: 'internal_error' });
   });
 
   return app;
