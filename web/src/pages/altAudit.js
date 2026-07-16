@@ -48,23 +48,14 @@ function findingRow(finding, legend) {
   const meta = legend?.[finding.type] || { label: FALLBACK_LABEL[finding.type], detail: '' };
   const badgeClass = BADGE_CLASS[finding.type] || 'badge-draft';
 
-  // A small, decorative preview of the image. Its own alt is intentionally empty
-  // (it is redundant next to the source URL and finding metadata). Broken/remote
-  // images simply hide themselves; no layout break.
-  const preview = h('img', {
-    class: 'alt-audit-thumb',
-    src: finding.src,
-    alt: '',
-    loading: 'lazy',
-    onerror: (e) => {
-      e.target.style.visibility = 'hidden';
-    },
-  });
-
+  // No live image preview: the audited src is deliberately never used as an
+  // active network resource. Rendering an <img> here would make simply opening
+  // the audit page fetch arbitrary URLs embedded in old posts (leaking that an
+  // admin viewed the page, sending referrers, or hitting same-origin GET
+  // endpoints). The source is shown only as inert text below.
   return h(
     'li',
     { class: 'alt-audit-finding' },
-    preview,
     h(
       'div',
       { class: 'alt-audit-finding-body' },
@@ -240,7 +231,7 @@ export async function render({ view }) {
         'div',
         { class: 'empty-state' },
         h('p', null, 'Nenhuma imagem com problema de texto alternativo foi encontrada.'),
-        h('p', { class: 'muted' }, 'Todas as imagens auditadas têm descrição adequada ou estão marcadas como decorativas.'),
+        h('p', { class: 'muted' }, 'Nenhuma imagem com alt ausente, vazio ou genérico foi encontrada.'),
         h(
           'button',
           { class: 'btn btn-ghost', type: 'button', onclick: () => navigate('/admin') },

@@ -120,6 +120,46 @@ describe('alt audit page', () => {
     // Both local and external sources are shown safely as text.
     expect(view.textContent).toContain('/uploads/a.png');
     expect(view.textContent).toContain('https://cdn.example.com/b.png');
+
+    // The audited source is never turned into a live <img>: opening the audit
+    // must not fetch arbitrary URLs embedded in old posts.
+    expect(view.querySelector('img')).toBeNull();
+  });
+
+  it('never loads audited sources as active image resources', async () => {
+    api.auditAltText.mockResolvedValue(
+      auditResult({
+        totalPosts: 1,
+        totalFindings: 3,
+        items: [
+          {
+            postId: 9,
+            title: 'Sources',
+            slug: 'sources',
+            findings: [
+              // External URL (would phone a remote server if previewed).
+              { src: 'https://tracker.example.com/pixel.png', alt: null, type: 'missing_alt' },
+              // Same-origin endpoint-like URL (would trigger an arbitrary GET).
+              { src: '/api/posts/1?delete=1', alt: '', type: 'empty_alt' },
+              // Hostile-looking source.
+              { src: 'javascript:alert(1)', alt: 'image', type: 'placeholder_alt' },
+            ],
+          },
+        ],
+      })
+    );
+    const view = makeView();
+    await render({ view });
+    await flush();
+
+    // No <img> is created from any audited source.
+    expect(view.querySelectorAll('img')).toHaveLength(0);
+
+    // Each source is present only as inert text inside a <code> element.
+    const sources = [...view.querySelectorAll('.alt-audit-src-value')].map((c) => c.textContent);
+    expect(sources).toContain('https://tracker.example.com/pixel.png');
+    expect(sources).toContain('/api/posts/1?delete=1');
+    expect(sources).toContain('javascript:alert(1)');
   });
 
   it('links each affected post to its editor', async () => {
