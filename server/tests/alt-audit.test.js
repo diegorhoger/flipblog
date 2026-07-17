@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { app, request, authedAgent } from './helpers.js';
 import { getDb } from '../src/db.js';
-import { createUser, seedAdminIfMissing } from '../src/services/admin.js';
+import { createUser, seedUserIfMissing } from '../src/services/users.js';
 import { createPost } from '../src/services/posts.js';
 import {
   auditPostContent,
@@ -18,9 +18,9 @@ function resetPosts() {
 
 // Seed the real admin up front. Some tests below create additional users (e.g. a
 // non-manager role) directly; without an admin already present, a later
-// seedAdminIfMissing() would see a non-empty admin table and skip creating the
+// seedUserIfMissing() would see a non-empty admin table and skip creating the
 // canonical admin, breaking authedAgent() logins.
-await seedAdminIfMissing();
+await seedUserIfMissing();
 
 // --- Pure classifier / parser unit tests ------------------------------------
 
@@ -269,3 +269,4 @@ test('a post with only meaningful alt text produces no findings', async () => {
   assert.equal(res.body.totalFindings, 0);
   assert.equal(res.body.items.length, 0);
 });
+

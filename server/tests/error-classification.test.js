@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { app, request, authedAgent } from './helpers.js';
 import { getDb } from '../src/db.js';
 import { config } from '../src/config.js';
-import { createUser } from '../src/services/admin.js';
+import { createUser } from '../src/services/users.js';
 
 // A 1x1 PNG accepted by the upload fileFilter; the exact bytes are irrelevant.
 const PNG_1X1 = Buffer.from(
@@ -32,7 +32,7 @@ test('avatar DB failure returns a generic 500, not a 400, and leaks nothing', as
   // Force the avatar UPDATE to fail while SELECTs still work. A raw handler error
   // like this used to fall through uploadErrorHandler and become a misleading 400
   // carrying the DB message; it must now be a generic 500.
-  db.exec("CREATE TEMP TRIGGER fail_avatar_update BEFORE UPDATE ON admin BEGIN SELECT RAISE(ABORT, 'boom'); END;");
+  db.exec("CREATE TEMP TRIGGER fail_avatar_update BEFORE UPDATE ON users BEGIN SELECT RAISE(ABORT, 'boom'); END;");
   try {
     const res = await agent.post('/api/auth/avatar').attach('file', PNG_1X1, 'pic.png');
     assert.equal(res.status, 500);
@@ -57,7 +57,7 @@ test('an unexpected route error surfaces as a generic 500 without leaking intern
   assert.equal(login.status, 200);
 
   const db = getDb();
-  db.exec("CREATE TEMP TRIGGER fail_pw_update BEFORE UPDATE ON admin BEGIN SELECT RAISE(ABORT, 'boom'); END;");
+  db.exec("CREATE TEMP TRIGGER fail_pw_update BEFORE UPDATE ON users BEGIN SELECT RAISE(ABORT, 'boom'); END;");
   try {
     const res = await agent
       .post('/api/auth/change-password')
@@ -162,3 +162,4 @@ test('a missing resource returns 404 with a stable code', async () => {
   assert.equal(res.status, 404);
   assert.equal(res.body.error, 'not_found');
 });
+

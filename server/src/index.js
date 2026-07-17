@@ -1,9 +1,9 @@
 import { app } from './app.js';
 import { config } from './config.js';
-import { seedAdminIfMissing } from './services/admin.js';
+import { seedUserIfMissing } from './services/users.js';
 import { seedSamplePosts } from './seed.js';
 
-seedAdminIfMissing()
+seedUserIfMissing()
   .then(() => seedSamplePosts())
   .then(() => {
     app.listen(config.port, config.host, () => {

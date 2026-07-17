@@ -8,7 +8,7 @@ import { runMigrations } from './migrations/index.js';
 // category/tags/page_count, comments, indexes) is applied by ordered, versioned
 // migrations so the schema evolves without brittle inline ALTER checks.
 const SCHEMA = `
-CREATE TABLE IF NOT EXISTS admin (
+CREATE TABLE IF NOT EXISTS users (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   username      TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,

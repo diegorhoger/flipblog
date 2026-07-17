@@ -8,12 +8,12 @@ import { deleteUnreferencedUploads } from '../services/uploadRefs.js';
 import {
   authenticate,
   createUser,
-  getAdminByUsername,
+  getUserByUsername,
   getUserById,
   verifyUserPassword,
   updatePassword,
   setAvatar,
-} from '../services/admin.js';
+} from '../services/users.js';
 
 const router = Router();
 
@@ -149,7 +149,7 @@ router.post(
   async (req, res, next) => {
     try {
       const { username, password, role } = req.valid;
-      if (getAdminByUsername(username)) {
+      if (getUserByUsername(username)) {
         return res.status(409).json({ error: 'username_taken' });
       }
       const user = await createUser({ username, password, role });
