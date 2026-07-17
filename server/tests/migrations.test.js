@@ -113,7 +113,7 @@ test('avatar migration is idempotent when the column already exists', () => {
 test('migration 004 renames an existing admin table to users, preserving data', () => {
   const db = makeDb();
   // Simulate a pre-rename deployment: an `admin` table (with rows) and a `posts`
-  // table, as created by the baseline schema before this change.
+  // table, as created by the baseline schema.
   db.exec(
     `CREATE TABLE admin (
        id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,27 +134,23 @@ test('migration 004 renames an existing admin table to users, preserving data', 
 
   runMigrations(db, [migration001, migration002, migration003, migration004]);
 
-  // The old name is gone; the new name exists with all columns from 001-003.
   assert.equal(tableExists(db, 'admin'), false);
   assert.equal(tableExists(db, 'users'), true);
   for (const col of ['id', 'username', 'password_hash', 'created_at', 'role', 'avatar']) {
     assert.equal(columnExists(db, 'users', col), true, `users should have column ${col}`);
   }
-  // Data survives the rename.
   const row = db.prepare('SELECT username, role FROM users WHERE username = ?').get('alice');
   assert.equal(row.username, 'alice');
   assert.equal(row.role, 'admin');
-  // Migration 003 added ownership to posts (now under the users rename, the
-  // posts table is untouched and still carries author_id).
   assert.equal(columnExists(db, 'posts', 'author_id'), true);
-  // The migration registry recorded the rename.
   assert.equal(migrationExists(db, 4), true);
 });
 
-test('migration 004 is a no-op on a fresh database already using users', () => {
+test('migration 004 is a no-op when only users exists (idempotent re-run)', () => {
   const db = makeDb();
+  // An existing `admin` table starts the sequence; everything still ends on users.
   db.exec(
-    `CREATE TABLE users (
+    `CREATE TABLE admin (
        id INTEGER PRIMARY KEY AUTOINCREMENT,
        username TEXT UNIQUE NOT NULL,
        password_hash TEXT NOT NULL,
