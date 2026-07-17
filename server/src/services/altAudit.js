@@ -1,5 +1,6 @@
 import { parseHTML } from 'linkedom';
 import { getDb } from '../db.js';
+import { forbidden } from '../errors.js';
 
 // Legacy image alt-text auditing.
 //
@@ -174,12 +175,6 @@ export function auditPostContent(html) {
     });
   }
   return findings;
-}
-
-function forbidden() {
-  const err = new Error('forbidden');
-  err.status = 403;
-  return err;
 }
 
 /**

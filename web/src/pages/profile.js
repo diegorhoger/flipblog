@@ -5,6 +5,28 @@ import { formatDate } from '../lib/format.js';
 
 const ROLE_LABEL = { admin: 'Administrador', author: 'Autor' };
 
+// Map an avatar-upload HTTP status to a user-facing message. The server now
+// distinguishes user-input problems (413/415/400) from unexpected server-side
+// failures (5xx), so the UI must stop treating *every* failure as "your image
+// was bad". A database/server error is not the user's fault and should not imply
+// their file was rejected.
+export function avatarErrorMessage(status) {
+  switch (status) {
+    case 415:
+      return 'Formato de imagem não suportado.';
+    case 413:
+      return 'Imagem muito grande (máx. 5 MB).';
+    case 400:
+      return 'Arquivo inválido. Selecione uma imagem.';
+    case 401:
+      return 'Sua sessão expirou. Faça login novamente.';
+    default:
+      return status >= 500
+        ? 'Erro no servidor ao salvar a imagem. Tente novamente mais tarde.'
+        : 'Falha ao enviar a imagem.';
+  }
+}
+
 function buildAvatar(username, avatar) {
   if (avatar) return h('img', { class: 'avatar-lg', src: avatar, alt: 'foto de perfil' });
   return h('div', { class: 'avatar-lg avatar-fallback' }, (username || '?').charAt(0).toUpperCase());
@@ -37,12 +59,11 @@ export async function render({ view }) {
     avatarSuccess.textContent = '';
     const { ok, status, data } = await api.uploadAvatar(file);
     if (!ok) {
-      avatarError.textContent =
-        status === 415
-          ? 'Formato de imagem não suportado.'
-          : status === 413
-            ? 'Imagem muito grande (máx. 5 MB).'
-            : 'Falha ao enviar a imagem.';
+      if (status === 401) {
+        navigate('/login');
+        return;
+      }
+      avatarError.textContent = avatarErrorMessage(status);
       return;
     }
     avatarSuccess.textContent = 'Foto atualizada.';

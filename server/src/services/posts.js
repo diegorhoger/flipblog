@@ -2,6 +2,7 @@ import { getDb } from '../db.js';
 import { splitIntoPages, countPages } from './paginate.js';
 import { sanitizeContent, sanitizeText } from './sanitize.js';
 import { extractUploadUrls, diffRemovedUploads, deleteUnreferencedUploads } from './uploadRefs.js';
+import { badRequest, forbidden } from '../errors.js';
 
 export function slugify(input) {
   const base = String(input || '')
@@ -109,9 +110,7 @@ export function getPostById(id, actor = null) {
   // admin. Without this guard, the null-actor internal calls below (and anonymous
   // readers) would be wrongly rejected for public content.
   if (row.status !== 'published' && !canRead(row, actor)) {
-    const err = new Error('forbidden');
-    err.status = 403;
-    throw err;
+    throw forbidden();
   }
   return hydrate(row);
 }
@@ -133,7 +132,7 @@ function hydrate(row) {
 export function createPost(input = {}, actor = null) {
   const db = getDb();
   const title = sanitizeText(input.title, 200);
-  if (!title) throw new Error('title is required');
+  if (!title) throw badRequest('title_required');
   const content = sanitizeContent(input.content || '');
   const excerpt = input.excerpt ? sanitizeText(input.excerpt, 280) : excerptFromContent(content);
   const slug = ensureUniqueSlug(db, slugify(input.slug || title));
@@ -162,12 +161,6 @@ export function createPost(input = {}, actor = null) {
     );
 
   return getPostById(info.lastInsertRowid, actor);
-}
-
-function forbidden() {
-  const err = new Error('forbidden');
-  err.status = 403;
-  return err;
 }
 
 // Authors may only modify their own posts; admins may modify any post.
