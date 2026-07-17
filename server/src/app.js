@@ -4,6 +4,9 @@ import { join } from 'node:path';
 import { config } from './config.js';
 import { getDb } from './db.js';
 import { ApiError } from './errors.js';
+import { logger } from './logging.js';
+import { createErrorHandler } from './errorHandler.js';
+import { requestId } from './middleware/requestId.js';
 import authRoutes from './routes/auth.js';
 import postRoutes from './routes/posts.js';
 import uploadRoutes from './routes/uploads.js';
@@ -31,6 +34,7 @@ export function createApp() {
 
   app.use(parseCookies);
   app.use(express.json({ limit: '2mb' }));
+  app.use(requestId({ log: logger }));
 
   app.use('/api', (req, res, next) => {
     res.set('Cache-Control', 'no-store');
@@ -53,38 +57,10 @@ export function createApp() {
     next();
   });
 
-  // Central error handler. It draws a hard line between two kinds of failure:
-  //
-  //   * Known, client-facing errors (ApiError): validation, auth, lookup and
-  //     conflict problems. These carry an explicit status + a stable, safe code
-  //     that we surface as-is (with optional validation `details`).
-  //   * Client request-parsing errors raised by `express.json()` before any
-  //     route runs: malformed JSON and oversized bodies. These are bad requests,
-  //     not server faults, so they map to fixed safe codes (400/413) — never the
-  //     parser's message or the offending body.
-  //   * Everything else: unexpected application/database failures (raw Errors,
-  //     SQLite exceptions, filesystem errors, bugs). These are logged
-  //     server-side and returned as a generic 500 so we never leak the
-  //     underlying message, stack trace, SQL text, filenames, or filesystem
-  //     paths to the client.
-  //
-  // eslint-disable-next-line no-unused-vars
-  app.use((err, req, res, next) => {
-    if (err instanceof ApiError) {
-      const body = { error: err.code };
-      if (err.details !== undefined) body.details = err.details;
-      return res.status(err.status).json(body);
-    }
-    // body-parser (express.json) surfaces client-input problems via `err.type`.
-    if (err?.type === 'entity.parse.failed') {
-      return res.status(400).json({ error: 'invalid_json' });
-    }
-    if (err?.type === 'entity.too.large') {
-      return res.status(413).json({ error: 'payload_too_large' });
-    }
-    console.error(err);
-    res.status(500).json({ error: 'internal_error' });
-  });
+  // Central error handler (see errorHandler.js for the full taxonomy). It
+  // classifies ApiError / body-parser / unexpected failures, correlates a 500
+  // with the request id via the structured logger, and never leaks internals.
+  app.use(createErrorHandler(logger));
 
   return app;
 }
