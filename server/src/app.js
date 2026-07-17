@@ -32,9 +32,12 @@ export function createApp() {
   getDb();
   const app = express();
 
+  // Request correlation starts before any middleware that can reject the request
+  // (the JSON body parser), so malformed/oversized bodies and every other
+  // response still carry a stable X-Request-ID that ties the client to the logs.
+  app.use(requestId({ log: logger }));
   app.use(parseCookies);
   app.use(express.json({ limit: '2mb' }));
-  app.use(requestId({ log: logger }));
 
   app.use('/api', (req, res, next) => {
     res.set('Cache-Control', 'no-store');

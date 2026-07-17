@@ -50,19 +50,19 @@ test('generateRequestId yields a strict-pattern uuid', () => {
 
 // --- safe error extraction (no stack / no leaked internals) ---
 
-test('extractError drops the stack and returns only a coarse shape', () => {
+test('extractError returns only a coarse classification, never the message', () => {
   const err = new Error("SELECT * FROM admin WHERE secret='x'");
   err.code = 'ERR_SQLITE_ERROR';
   const ex = extractError(err);
-  assert.equal(ex.name, 'Error');
-  assert.equal(ex.code, 'ERR_SQLITE_ERROR');
-  assert.ok(ex.message.includes('SELECT'));
+  assert.deepEqual(ex, { name: 'Error', code: 'ERR_SQLITE_ERROR' });
+  assert.ok(!('message' in ex));
   assert.ok(!('stack' in ex));
 });
 
 test('extractError tolerates non-Error throws', () => {
-  assert.deepEqual(extractError('boom'), { name: 'Error', message: 'boom' });
-  assert.deepEqual(extractError({ name: 'Weird' }), { name: 'Weird', message: '[object Object]' });
+  assert.deepEqual(extractError('boom'), { name: 'Error' });
+  assert.deepEqual(extractError({ name: 'Weird', code: 'X' }), { name: 'Weird', code: 'X' });
+  assert.deepEqual(extractError({ code: 'X' }), { name: 'Error', code: 'X' });
 });
 
 // --- redaction of sensitive data ---
@@ -94,7 +94,7 @@ test('redact drops functions and bounds depth / cycles', () => {
 
 test('logger writes one structured JSON line per call and redacts', () => {
   const cap = captureStream();
-  const log = createLogger({ stream: cap.stream, isProduction: true });
+  const log = createLogger({ stream: cap.stream });
   log.info({ requestId: 'r1', method: 'GET', password: 'nope', path: '/api/auth/login' });
   const lines = cap.lines();
   assert.equal(lines.length, 1);
@@ -106,23 +106,24 @@ test('logger writes one structured JSON line per call and redacts', () => {
   assert.ok(typeof line.time === 'string');
 });
 
-test('logger.error records error classification without leaking internals', () => {
-  const cap = captureStream();
-  const log = createLogger({ stream: cap.stream, isProduction: true });
-  const err = new Error('boom at C:\\secret\\path sql=err');
-  err.code = 'ERR_SQLITE_ERROR';
-  log.error({ requestId: 'r9', path: '/x', code: 'internal_error' }, err);
-  const line = cap.lines()[0];
-  assert.equal(line.level, 'error');
-  assert.equal(line.requestId, 'r9');
-  assert.equal(line.code, 'internal_error');
-  // In production we still log the coarse error name + code for correlation, but
-  // never the raw message (which may carry SQL/paths) or the stack.
-  assert.equal(line.error.name, 'Error');
-  assert.equal(line.error.code, 'ERR_SQLITE_ERROR');
-  assert.ok(line.error.message === undefined || !line.error.message.includes('boom'));
-  assert.ok(!('stack' in line));
-  assert.ok(JSON.stringify(line).includes('[redacted]') === false);
+test('logger.error records only a coarse classification and never the message or stack', () => {
+  for (const isProd of [true, false]) {
+    const cap = captureStream();
+    const log = createLogger({ stream: cap.stream });
+    const err = new Error('boom at C:\\secret\\path sql=err');
+    err.code = 'ERR_SQLITE_ERROR';
+    log.error({ requestId: 'r9', path: '/x', code: 'internal_error' }, err);
+    const line = cap.lines()[0];
+    assert.equal(line.level, 'error');
+    assert.equal(line.requestId, 'r9');
+    assert.equal(line.code, 'internal_error');
+    assert.deepEqual(line.error, { name: 'Error', code: 'ERR_SQLITE_ERROR' });
+    const serialized = JSON.stringify(line);
+    assert.ok(!serialized.includes('boom'), 'raw message must never appear');
+    assert.ok(!serialized.includes('C:\\secret'), 'filesystem paths must never appear');
+    assert.ok(!serialized.includes('sql=err'), 'SQL fragments must never appear');
+    assert.ok(!('stack' in line), 'stack must never appear');
+  }
 });
 
 // --- requestId middleware ---
@@ -251,4 +252,36 @@ test('body-parser errors map to fixed safe codes without logging', async () => {
   run({ type: 'entity.parse.failed' }, 400, 'invalid_json');
   run({ type: 'entity.too.large' }, 413, 'payload_too_large');
   assert.equal(logged.length, 0);
+});
+
+// --- end-to-end: correlation id reaches even parser-rejected responses ---
+
+test('malformed JSON responses still carry an X-Request-ID header', async () => {
+  const res = await request(app)
+    .post('/api/auth/login')
+    .set('Content-Type', 'application/json')
+    .set('X-Request-ID', 'trace-badjson-1')
+    .send('{"username": "abc", "oops"');
+  assert.equal(res.status, 400);
+  assert.equal(res.headers['x-request-id'], 'trace-badjson-1');
+});
+
+test('oversized JSON responses still carry an X-Request-ID header', async () => {
+  const huge = 'x'.repeat(2 * 1024 * 1024 + 1024);
+  const res = await request(app)
+    .post('/api/auth/login')
+    .set('Content-Type', 'application/json')
+    .set('X-Request-ID', 'trace-bigjson-1')
+    .send(JSON.stringify({ username: huge, password: 'x' }));
+  assert.equal(res.status, 413);
+  assert.equal(res.headers['x-request-id'], 'trace-bigjson-1');
+});
+
+test('correlation id is generated for malformed JSON when none is supplied', async () => {
+  const res = await request(app)
+    .post('/api/auth/login')
+    .set('Content-Type', 'application/json')
+    .send('{"username": "abc", "oops"');
+  assert.equal(res.status, 400);
+  assert.ok(REQUEST_ID_PATTERN.test(res.headers['x-request-id']));
 });

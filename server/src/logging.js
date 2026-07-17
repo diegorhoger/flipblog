@@ -79,27 +79,25 @@ export function redact(event) {
 // --- Safe error extraction -------------------------------------------------
 //
 // Convert an arbitrary thrown value into a small, safe object. We never forward
-// the raw Error (its message may contain SQL text, file paths, or stack frames).
-// We keep only a coarse classification plus — in non-production — the message for
-// local debugging. The stack is intentionally omitted: `log()` already records
-// `err.stack` separately and only in development.
+// the raw message, stack, SQL text, or file paths — only a coarse classification
+// (name + optional code). Callers must never rely on `extractError` for anything
+// user-facing; it exists purely for structured logs, which deliberately omit the
+// message and stack. Non-Error throws are reduced to a fixed classification.
 export function extractError(err) {
   if (err && typeof err === 'object') {
     const name = typeof err.name === 'string' ? err.name : 'Error';
-    const message = typeof err.message === 'string' ? err.message : String(err);
     const code = typeof err.code === 'string' ? err.code : undefined;
-    return code !== undefined ? { name, message, code } : { name, message };
+    return code !== undefined ? { name, code } : { name };
   }
-  return { name: 'Error', message: String(err) };
+  return { name: 'Error' };
 }
 
 // --- Logger ----------------------------------------------------------------
 //
 // Emits one structured JSON line per call. A `stream` may be injected for tests
-// (defaults to process.stdout so structured logs go to the normal console sink);
-// `isProduction` controls whether verbose debugging fields (the error message and
-// stack) are included. All events are routed through `redact()` first.
-export function createLogger({ stream = process.stdout, isProduction = false } = {}) {
+// (defaults to process.stdout so structured logs go to the normal console sink).
+// All events are routed through `redact()` first.
+export function createLogger({ stream = process.stdout } = {}) {
   function log(level, event) {
     const sanitized = redact(event);
     const record = {
@@ -118,29 +116,20 @@ export function createLogger({ stream = process.stdout, isProduction = false } =
     warn(event) {
       log('warn', event);
     },
-    // `err` is a raw Error (or thrown value). In production we log only a coarse
-    // classification + the request id (no message, no stack — those may carry SQL
-    // text, file paths, or secrets); in development we also include the message
-    // and stack for local debugging. Neither is ever returned to the client.
+    // `err` is a raw Error (or thrown value). The structured log NEVER contains the
+    // raw message or stack — those can carry SQL text, file paths, or secrets. It
+    // records only a coarse, safe classification (name + optional code) plus
+    // whatever correlation fields the caller attached (e.g. request id). Neither is
+    // ever returned to the client; the response body stays a fixed `internal_error`.
     error(event, err) {
       const base = typeof event === 'object' && event !== null ? event : { note: String(event) };
       if (err !== undefined) {
         const ex = extractError(err);
-        if (!isProduction) {
-          base.error = ex;
-          if (err && typeof err === 'object' && typeof err.stack === 'string') {
-            base.stack = err.stack;
-          }
-        } else {
-          // Production: keep only a coarse, safe classification, never the message.
-          base.error = { name: ex.name, code: ex.code };
-        }
+        base.error = { name: ex.name, ...(ex.code !== undefined ? { code: ex.code } : {}) };
       }
       log('error', base);
     },
   };
 }
 
-export const logger = createLogger({
-  isProduction: process.env.NODE_ENV === 'production',
-});
+export const logger = createLogger();
