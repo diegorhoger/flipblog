@@ -70,10 +70,10 @@ export function resolveConfig(env = process.env) {
   };
 }
 
-// Re-resolved on every access: loadEnvFile() has already populated
-// process.env above, and resolving lazily lets the configuration react to a
-// changed DB_PATH (e.g. an isolated database file in tests) without requiring a
-// process restart or module re-import.
-export const config = new Proxy({}, { get: (_t, prop) => resolveConfig(process.env)[prop] });
+// Resolved once at module load. Each process (including the startup-migration
+// child-process fixtures) sets its environment before importing this module, so
+// a single static resolution keeps config.dbPath and isMemoryDb in agreement —
+// isMemoryDb must reflect the same dbPath that getDb() opens, not a stale view.
+export const config = resolveConfig(process.env);
 
 export const isMemoryDb = config.dbPath === ':memory:';
