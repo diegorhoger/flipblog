@@ -59,13 +59,17 @@ test('legacy database startup migrates admin -> users and preserves data + auth'
   const dbFile = join(dir, 'data.db');
 
   // Seed a legacy deployment: an `admin` table with rows (but no `users`).
+  // The columns match the current baseline `admin` schema so the real startup
+  // (baseline + migrations + seed) can run against it unchanged.
   const seed = new DatabaseSync(dbFile);
   seed.exec(
     `CREATE TABLE admin (
        id INTEGER PRIMARY KEY AUTOINCREMENT,
        username TEXT UNIQUE NOT NULL,
        password_hash TEXT NOT NULL,
-       created_at TEXT NOT NULL
+       created_at TEXT NOT NULL,
+       role TEXT NOT NULL DEFAULT 'admin',
+       avatar TEXT
      )`
   );
   seed.exec(
@@ -73,7 +77,13 @@ test('legacy database startup migrates admin -> users and preserves data + auth'
        id INTEGER PRIMARY KEY AUTOINCREMENT,
        slug TEXT UNIQUE NOT NULL,
        title TEXT NOT NULL,
-       content TEXT NOT NULL DEFAULT ''
+       author TEXT NOT NULL DEFAULT '',
+       excerpt TEXT NOT NULL DEFAULT '',
+       cover_image TEXT,
+       content TEXT NOT NULL DEFAULT '',
+       status TEXT NOT NULL DEFAULT 'published',
+       created_at TEXT NOT NULL,
+       updated_at TEXT NOT NULL
      )`
   );
   seed
@@ -185,6 +195,126 @@ test('a database with both admin and users fails closed and preserves both', () 
     after.prepare("SELECT COUNT(*) AS c FROM schema_migrations WHERE version = 4").get().c,
     0,
     'migration 004 must not be recorded on failure'
+  );
+  after.close();
+
+  cleanup(dir, dbFile);
+});
+
+// ---- migration 005: posts.author_id -> users.id foreign key ----
+
+test('fresh database startup has the posts.author_id -> users foreign key', () => {
+  const dir = newDir('flipblog-fk-fresh-');
+  const dbFile = join(dir, 'data.db');
+
+  const result = runStartup(dbFile, { seed: true });
+  assert.equal(result.status, 0, result.stderr);
+  const summary = JSON.parse(result.stdout);
+  assert.equal(summary.postsAuthorFk, true, 'posts.author_id FK to users present after fresh startup');
+
+  cleanup(dir, dbFile);
+});
+
+test('restarting an already-migrated database keeps the posts.author_id foreign key', () => {
+  const dir = newDir('flipblog-fk-restart-');
+  const dbFile = join(dir, 'data.db');
+
+  const first = runStartup(dbFile, { seed: true });
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(JSON.parse(first.stdout).postsAuthorFk, true);
+
+  const second = runStartup(dbFile, { seed: true });
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(JSON.parse(second.stdout).postsAuthorFk, true, 'FK still present after restart');
+
+  cleanup(dir, dbFile);
+});
+
+test('deleting a user sets owned posts author_id to NULL (ON DELETE SET NULL)', () => {
+  const dir = newDir('flipblog-fk-delete-');
+  const dbFile = join(dir, 'data.db');
+
+  // Seed an owner (migration_admin) and a post owned by that user.
+  const seed = runStartup(dbFile, { seed: true });
+  assert.equal(seed.status, 0, seed.stderr);
+  const seeded = JSON.parse(seed.stdout);
+  const owner = seeded.users.find((u) => u.username === 'migration_admin');
+  assert.ok(owner, 'configured admin was seeded');
+
+  const db = new DatabaseSync(dbFile);
+  db.exec('PRAGMA foreign_keys = ON;');
+  db.prepare(
+    'INSERT INTO posts (slug, title, author, content, status, created_at, updated_at, author_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run('owned-post', 'Owned', 'Author', 'body', 'published', '2026-02-01', '2026-02-01', owner.id);
+  // Delete the owning user; the FK must null the post's author_id, not delete it.
+  db.prepare('DELETE FROM users WHERE id = ?').run(owner.id);
+  db.close();
+
+  // Re-open via the real startup path to confirm the post survived and is now
+  // ownerless (author_id NULL) rather than gone.
+  const reopen = runStartup(dbFile, { seed: false });
+  assert.equal(reopen.status, 0, reopen.stderr);
+  const after = new DatabaseSync(dbFile);
+  const row = after.prepare('SELECT id, author_id FROM posts WHERE slug = ?').get('owned-post');
+  assert.ok(row, 'post must survive its owner deletion');
+  assert.equal(row.author_id, null, 'author_id set to NULL on owner deletion');
+  after.close();
+
+  cleanup(dir, dbFile);
+});
+
+test('a database with orphaned post ownership fails closed and preserves posts', () => {
+  const dir = newDir('flipblog-fk-orphan-');
+  const dbFile = join(dir, 'data.db');
+
+  // Pre-create users + posts, with a post pointing at a non-existent user.
+  const seed = new DatabaseSync(dbFile);
+  seed.exec(
+    `CREATE TABLE users (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       username TEXT UNIQUE NOT NULL,
+       password_hash TEXT NOT NULL,
+       created_at TEXT NOT NULL
+     )`
+  );
+  seed.exec(
+    `CREATE TABLE posts (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       slug TEXT UNIQUE NOT NULL,
+       title TEXT NOT NULL,
+       author TEXT NOT NULL DEFAULT '',
+       excerpt TEXT NOT NULL DEFAULT '',
+       cover_image TEXT,
+       content TEXT NOT NULL DEFAULT '',
+       status TEXT NOT NULL DEFAULT 'published',
+       created_at TEXT NOT NULL,
+       updated_at TEXT NOT NULL,
+       author_id INTEGER
+     )`
+  );
+  seed.prepare('INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)').run('u1', 'h', '2026-01-01');
+  seed
+    .prepare('INSERT INTO posts (slug, title, content, created_at, updated_at, author_id) VALUES (?, ?, ?, ?, ?, ?)')
+    .run('orphan-post', 'Orphan', 'body', '2026-01-02', '2026-01-02', 999);
+  seed.close();
+
+  const result = runStartup(dbFile, { seed: true });
+  // Migration 005 must fail closed on the orphan.
+  assert.notEqual(result.status, 0, 'startup must refuse to migrate when posts reference a missing user');
+
+  // The posts table and orphan row are preserved (no partial rebuild).
+  const after = new DatabaseSync(dbFile);
+  assert.equal(
+    !!after.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='posts'").get(),
+    true
+  );
+  const row = after.prepare('SELECT author_id FROM posts WHERE slug = ?').get('orphan-post');
+  assert.equal(row.author_id, 999, 'orphan row untouched after failed migration');
+  // Migration 005 was never recorded.
+  assert.equal(
+    after.prepare("SELECT COUNT(*) AS c FROM schema_migrations WHERE version = 5").get().c,
+    0,
+    'migration 005 must not be recorded on failure'
   );
   after.close();
 

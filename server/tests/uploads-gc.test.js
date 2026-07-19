@@ -1,4 +1,4 @@
-import { test, after } from 'node:test';
+import { test, after, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -13,8 +13,16 @@ import {
   diffRemovedUploads,
 } from '../src/services/uploadRefs.js';
 
-// Owner/admin actor so updatePost/deletePost authorization passes.
+// Owner/admin actor so updatePost/deletePost authorization passes. Its sub (1)
+// must correspond to a real row in `users`, or the posts.author_id foreign key
+// (migration 005) rejects the insert.
 const ADMIN = { sub: 1, role: 'admin' };
+
+// Seed the configured admin (id 1) before any post is created, so the
+// posts.author_id foreign key references a valid user.
+before(async () => {
+  await seedUserIfMissing();
+});
 
 mkdirSync(config.uploadsDir, { recursive: true });
 

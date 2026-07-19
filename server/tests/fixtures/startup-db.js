@@ -33,7 +33,19 @@ async function main() {
     .prepare('SELECT COUNT(*) AS c FROM schema_migrations WHERE version = 4')
     .get().c;
 
-  const summary = { tables, users, migration4Count: migration4 };
+  // posts.author_id -> users(id) foreign key (added by migration 005). A
+  // non-empty foreign_key_list means the constraint is declared on posts.
+  const postsFk = db
+    .prepare("PRAGMA foreign_key_list(posts)")
+    .all()
+    .filter((fk) => fk.table === 'users' && fk.from === 'author_id');
+
+  const summary = {
+    tables,
+    users,
+    migration4Count: migration4,
+    postsAuthorFk: postsFk.length > 0,
+  };
   process.stdout.write(JSON.stringify(summary));
   closeDb();
 }
