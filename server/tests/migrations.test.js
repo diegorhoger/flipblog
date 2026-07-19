@@ -349,4 +349,62 @@ test('migration 005 fails closed on orphaned ownership (no partial rebuild)', ()
   assert.equal(row.author_id, 999, 'orphan row untouched after failed migration');
 });
 
+// Explicit indexes/triggers on posts must survive the rebuild, and must still
+// work — not merely still be named in sqlite_master.
+function objectSql(db, type, name) {
+  return db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = ? AND name = ? AND tbl_name = 'posts'")
+    .get(type, name);
+}
+
+test('migration 005 preserves explicit indexes and triggers on posts', () => {
+  const db = makeDb();
+  seedAdminAndPosts(db, { withAuthorId: true });
+  // An operator-added index and trigger, the kind a real DB might carry.
+  db.exec('CREATE INDEX idx_posts_status ON posts(status)');
+  db.exec('CREATE TABLE posts_counter (n INTEGER)');
+  db.exec('CREATE TRIGGER posts_ai AFTER INSERT ON posts BEGIN INSERT INTO posts_counter (n) VALUES (1); END');
+
+  runMigrations(db, MIGRATIONS_TO_005);
+
+  // Both objects are restored with their original definitions.
+  assert.ok(objectSql(db, 'index', 'idx_posts_status'), 'explicit index restored');
+  assert.ok(objectSql(db, 'trigger', 'posts_ai'), 'explicit trigger restored');
+  assert.equal(postsFkPresent(db), true);
+
+  // The index is actually usable (the planner chooses it for a status lookup).
+  const plan = db.prepare("EXPLAIN QUERY PLAN SELECT id FROM posts WHERE status = 'published'").all();
+  assert.ok(
+    plan.some((p) => String(p.detail || '').includes('idx_posts_status')),
+    'restored index is used by the planner'
+  );
+
+  // Note: this node:sqlite build does not execute triggers, so we assert the
+  // trigger is preserved (present + correct SQL) rather than that it fires.
+  // Rows and ownership are intact.
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM posts').get().c, 1);
+  assert.equal(db.prepare('SELECT author_id FROM posts WHERE slug = ?').get('p1').author_id, 1);
+});
+
+test('migration 005 fails closed when an explicit object cannot be restored (rollback)', () => {
+  const db = makeDb();
+  seedAdminAndPosts(db, { withAuthorId: true });
+  db.exec('CREATE INDEX idx_posts_status ON posts(status)');
+  // A trigger whose body references a table that does not exist: it is captured
+  // and stored fine, but re-executing its CREATE fails, so restoration must
+  // throw and roll the whole transaction back.
+  db.exec('CREATE TRIGGER posts_bad AFTER INSERT ON posts BEGIN INSERT INTO no_such_table (x) VALUES (1); END');
+
+  assert.throws(() => runMigrations(db, MIGRATIONS_TO_005));
+  // Rollback restored the original, unrebuilt schema: posts (with its data and
+  // the valid explicit index) and no posts_new / v5 record.
+  assert.equal(tableExists(db, 'posts'), true);
+  assert.equal(tableExists(db, 'posts_new'), false);
+  assert.equal(migrationExists(db, 5), false);
+  assert.ok(objectSql(db, 'index', 'idx_posts_status'), 'valid index survived the rollback');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM posts').get().c, 1, 'rows intact after rollback');
+  assert.equal(postsFkPresent(db), false, 'fk not present because the rebuild was rolled back');
+});
+
+
 

@@ -230,6 +230,56 @@ test('restarting an already-migrated database keeps the posts.author_id foreign 
   cleanup(dir, dbFile);
 });
 
+test('explicit posts index is preserved through the rebuild (real startup)', () => {
+  const dir = newDir('flipblog-fk-index-');
+  const dbFile = join(dir, 'data.db');
+
+  // Pre-create a posts table carrying an operator-added explicit index.
+  const seed = new DatabaseSync(dbFile);
+  seed.exec(
+    `CREATE TABLE admin (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       username TEXT UNIQUE NOT NULL,
+       password_hash TEXT NOT NULL,
+       created_at TEXT NOT NULL,
+       role TEXT NOT NULL DEFAULT 'admin',
+       avatar TEXT
+     )`
+  );
+  seed.exec(
+    `CREATE TABLE posts (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       slug TEXT UNIQUE NOT NULL,
+       title TEXT NOT NULL,
+       author TEXT NOT NULL DEFAULT '',
+       excerpt TEXT NOT NULL DEFAULT '',
+       cover_image TEXT,
+       content TEXT NOT NULL DEFAULT '',
+       status TEXT NOT NULL DEFAULT 'published',
+       created_at TEXT NOT NULL,
+       updated_at TEXT NOT NULL,
+       author_id INTEGER
+     )`
+  );
+  seed.exec('CREATE INDEX idx_posts_status ON posts(status)');
+  seed.close();
+
+  const result = runStartup(dbFile, { seed: true });
+  assert.equal(result.status, 0, result.stderr);
+  const summary = JSON.parse(result.stdout);
+  assert.equal(summary.postsAuthorFk, true);
+
+  // The explicit index survives the migration.
+  const after = new DatabaseSync(dbFile);
+  assert.ok(
+    after.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_posts_status' AND tbl_name='posts'").get(),
+    'explicit posts index preserved through real startup'
+  );
+  after.close();
+
+  cleanup(dir, dbFile);
+});
+
 test('deleting a user sets owned posts author_id to NULL (ON DELETE SET NULL)', () => {
   const dir = newDir('flipblog-fk-delete-');
   const dbFile = join(dir, 'data.db');
