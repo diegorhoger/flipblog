@@ -70,6 +70,10 @@ export function resolveConfig(env = process.env) {
   };
 }
 
+// Resolved once at module load. Each process (including the startup-migration
+// child-process fixtures) sets its environment before importing this module, so
+// a single static resolution keeps config.dbPath and isMemoryDb in agreement —
+// isMemoryDb must reflect the same dbPath that getDb() opens, not a stale view.
 export const config = resolveConfig(process.env);
 
 export const isMemoryDb = config.dbPath === ':memory:';

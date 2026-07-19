@@ -2,6 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { runMigrations } from '../src/migrations/index.js';
+import migration001 from '../src/migrations/001_add_role.js';
+import migration002 from '../src/migrations/002_add_avatar.js';
+import migration003 from '../src/migrations/003_add_author_id.js';
+import migration004 from '../src/migrations/004_rename_admin_to_users.js';
 
 function makeDb() {
   const db = new DatabaseSync(':memory:');
@@ -104,4 +108,65 @@ test('avatar migration is idempotent when the column already exists', () => {
   ];
   assert.doesNotThrow(() => runMigrations(db, migrations));
   assert.equal(columnExists(db, 'admin', 'avatar'), true);
+});
+
+test('migration 004 renames an existing admin table to users, preserving data', () => {
+  const db = makeDb();
+  // Simulate a pre-rename deployment: an `admin` table (with rows) and a `posts`
+  // table, as created by the baseline schema.
+  db.exec(
+    `CREATE TABLE admin (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       username TEXT UNIQUE NOT NULL,
+       password_hash TEXT NOT NULL,
+       created_at TEXT NOT NULL
+     )`
+  );
+  db.exec(
+    `CREATE TABLE posts (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       slug TEXT UNIQUE NOT NULL,
+       title TEXT NOT NULL,
+       content TEXT NOT NULL DEFAULT ''
+     )`
+  );
+  db.exec("INSERT INTO admin (username, password_hash, created_at) VALUES ('alice', 'hash', '2026-01-01')");
+
+  runMigrations(db, [migration001, migration002, migration003, migration004]);
+
+  assert.equal(tableExists(db, 'admin'), false);
+  assert.equal(tableExists(db, 'users'), true);
+  for (const col of ['id', 'username', 'password_hash', 'created_at', 'role', 'avatar']) {
+    assert.equal(columnExists(db, 'users', col), true, `users should have column ${col}`);
+  }
+  const row = db.prepare('SELECT username, role FROM users WHERE username = ?').get('alice');
+  assert.equal(row.username, 'alice');
+  assert.equal(row.role, 'admin');
+  assert.equal(columnExists(db, 'posts', 'author_id'), true);
+  assert.equal(migrationExists(db, 4), true);
+});
+
+test('migration 004 is a no-op when only users exists (idempotent re-run)', () => {
+  const db = makeDb();
+  // An existing `admin` table starts the sequence; everything still ends on users.
+  db.exec(
+    `CREATE TABLE admin (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       username TEXT UNIQUE NOT NULL,
+       password_hash TEXT NOT NULL,
+       created_at TEXT NOT NULL
+     )`
+  );
+  db.exec(
+    `CREATE TABLE posts (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       slug TEXT UNIQUE NOT NULL,
+       title TEXT NOT NULL,
+       content TEXT NOT NULL DEFAULT ''
+     )`
+  );
+  assert.doesNotThrow(() => runMigrations(db, [migration001, migration002, migration003, migration004]));
+  assert.equal(tableExists(db, 'users'), true);
+  assert.equal(tableExists(db, 'admin'), false);
+  assert.equal(migrationExists(db, 4), true);
 });

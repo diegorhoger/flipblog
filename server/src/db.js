@@ -7,14 +7,16 @@ import { runMigrations } from './migrations/index.js';
 // Minimal baseline schema. All later structure (role, avatar, author_id,
 // category/tags/page_count, comments, indexes) is applied by ordered, versioned
 // migrations so the schema evolves without brittle inline ALTER checks.
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS admin (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  username      TEXT UNIQUE NOT NULL,
-  password_hash TEXT NOT NULL,
-  created_at    TEXT NOT NULL
-);
-
+//
+// `posts` is canonical from the start. The `admin` table is the *legacy* name;
+// migration 004 renames it to `users`, so both fresh and legacy databases take
+// the same transition path. The baseline creates `admin` ONLY when `users` is
+// absent: once migration 004 has run, `users` is canonical and a fresh `admin`
+// must not be recreated on the next startup (otherwise migration 004 would see
+// two tables and fail closed). On a legacy database `admin` already exists, and
+// on a fresh one it is created here and renamed — in neither case does a stray
+// `admin` survive after `users` exists.
+const BASELINE_POSTS = `
 CREATE TABLE IF NOT EXISTS posts (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   slug        TEXT UNIQUE NOT NULL,
@@ -26,6 +28,15 @@ CREATE TABLE IF NOT EXISTS posts (
   status      TEXT NOT NULL DEFAULT 'published',
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL
+);
+`;
+
+const BASELINE_ADMIN = `
+CREATE TABLE IF NOT EXISTS admin (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  username      TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  created_at    TEXT NOT NULL
 );
 `;
 
@@ -43,7 +54,16 @@ export function getDb() {
     db.exec('PRAGMA busy_timeout = 5000;');
   }
   db.exec('PRAGMA foreign_keys = ON;');
-  db.exec(SCHEMA);
+  db.exec(BASELINE_POSTS);
+  // Only seed the legacy `admin` table when `users` does not yet exist. After
+  // migration 004 has renamed it, `users` is the canonical accounts table and
+  // we must not recreate `admin` on a subsequent startup.
+  const hasUsers = !!db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+    .get();
+  if (!hasUsers) {
+    db.exec(BASELINE_ADMIN);
+  }
   runMigrations(db);
   return db;
 }

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { app, request, ADMIN, authedAgent } from './helpers.js';
-import { createUser } from '../src/services/admin.js';
+import { createUser } from '../src/services/users.js';
 
 test('login fails with wrong password', async () => {
   const res = await request(app).post('/api/auth/login').send({ username: ADMIN.username, password: 'wrong' });

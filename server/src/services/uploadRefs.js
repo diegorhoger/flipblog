@@ -106,7 +106,7 @@ function escapeLike(value) {
 // Post content and profile avatars share the same uploads directory and URL
 // space, so an upload is "in use" if it appears in any post's content OR is set
 // as any user's avatar. Avatars are compared by exact equality because the
-// `admin.avatar` column stores a single URL (not HTML). `excludeId` ignores a
+// The `users.avatar` column stores a single URL (not HTML). `excludeId` ignores a
 // specific post (not required after a committed mutation, but available for
 // completeness/testing).
 export function isUploadReferenced(url, { excludeId = null } = {}) {
@@ -123,7 +123,7 @@ export function isUploadReferenced(url, { excludeId = null } = {}) {
 
   // Never delete a file that is in use as a profile avatar, even though this PR
   // does not otherwise manage avatar lifecycle.
-  const avatarReference = db.prepare('SELECT 1 FROM admin WHERE avatar = ? LIMIT 1').get(url);
+  const avatarReference = db.prepare('SELECT 1 FROM users WHERE avatar = ? LIMIT 1').get(url);
   return !!avatarReference;
 }
 

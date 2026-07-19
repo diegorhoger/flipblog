@@ -13,11 +13,11 @@ import { config } from '../src/config.js';
 import { authedAgent } from './helpers.js';
 import { getDb } from '../src/db.js';
 import {
-  seedAdminIfMissing,
+  seedUserIfMissing,
   setAvatar,
   getUserById,
   createUser,
-} from '../src/services/admin.js';
+} from '../src/services/users.js';
 import { createPost } from '../src/services/posts.js';
 import { deleteUnreferencedUploads } from '../src/services/uploadRefs.js';
 
@@ -69,7 +69,7 @@ function img(url, alt = 'x') {
 }
 
 async function adminId() {
-  const seeded = await seedAdminIfMissing();
+  const seeded = await seedUserIfMissing();
   return seeded.id;
 }
 
@@ -200,7 +200,7 @@ test('a failed database update cleans the newly uploaded file best-effort', asyn
   const db = getDb();
   // Force the avatar UPDATE to fail without corrupting the schema. A BEFORE
   // UPDATE trigger raising ABORT makes setAvatar throw while SELECTs still work.
-  db.exec("CREATE TEMP TRIGGER fail_avatar_update BEFORE UPDATE ON admin BEGIN SELECT RAISE(ABORT, 'boom'); END;");
+  db.exec("CREATE TEMP TRIGGER fail_avatar_update BEFORE UPDATE ON users BEGIN SELECT RAISE(ABORT, 'boom'); END;");
   const before = listUploads();
   try {
     const res = await agent.post('/api/auth/avatar').attach('file', PNG_1X1, 'new.png');
@@ -225,7 +225,7 @@ test('a failed database update leaves the previous avatar untouched', async () =
   setAvatar(id, prev.url);
 
   const db = getDb();
-  db.exec("CREATE TEMP TRIGGER fail_avatar_update BEFORE UPDATE ON admin BEGIN SELECT RAISE(ABORT, 'boom'); END;");
+  db.exec("CREATE TEMP TRIGGER fail_avatar_update BEFORE UPDATE ON users BEGIN SELECT RAISE(ABORT, 'boom'); END;");
   try {
     const res = await agent.post('/api/auth/avatar').attach('file', PNG_1X1, 'new.png');
     assert.equal(res.status, 500);
@@ -253,3 +253,5 @@ test('the avatar response exposes only the new public URL and no filesystem path
   assert.ok(!serialized.includes(config.uploadsDir), 'must not leak the absolute uploads dir');
   assert.ok(!/[A-Za-z]:\\/.test(serialized), 'must not leak a Windows filesystem path');
 });
+
+

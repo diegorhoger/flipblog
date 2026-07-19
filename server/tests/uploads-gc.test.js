@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { config } from '../src/config.js';
 import { createPost, updatePost, deletePost } from '../src/services/posts.js';
-import { setAvatar, seedAdminIfMissing } from '../src/services/admin.js';
+import { setAvatar, seedUserIfMissing } from '../src/services/users.js';
 import {
   extractUploadUrls,
   uploadUrlToPath,
@@ -111,7 +111,7 @@ test('external image URLs are ignored by extraction and cleanup', () => {
 });
 
 test('a post update does not delete a file used as a profile avatar', async () => {
-  const seeded = await seedAdminIfMissing();
+  const seeded = await seedUserIfMissing();
   const a = makeUpload();
   setAvatar(seeded.id, a.url); // the file is now a profile avatar
   const post = createPost({ title: 'GC avatar update', content: img(a.url) }, ADMIN);
@@ -121,7 +121,7 @@ test('a post update does not delete a file used as a profile avatar', async () =
 });
 
 test('a post deletion does not delete a file used as a profile avatar', async () => {
-  const seeded = await seedAdminIfMissing();
+  const seeded = await seedUserIfMissing();
   const a = makeUpload();
   setAvatar(seeded.id, a.url);
   const post = createPost({ title: 'GC avatar delete', content: img(a.url) }, ADMIN);
@@ -131,7 +131,7 @@ test('a post deletion does not delete a file used as a profile avatar', async ()
 });
 
 test('a file becomes eligible for cleanup once no avatar references it', async () => {
-  const seeded = await seedAdminIfMissing();
+  const seeded = await seedUserIfMissing();
   const a = makeUpload();
   setAvatar(seeded.id, a.url);
   const post = createPost({ title: 'GC avatar cleared', content: img(a.url) }, ADMIN);
@@ -217,3 +217,4 @@ test('diffRemovedUploads reports only URLs dropped from content', () => {
   assert.deepEqual(diffRemovedUploads(prev, next), [a.url]);
   assert.deepEqual(diffRemovedUploads(next, next), []);
 });
+

@@ -1,11 +1,14 @@
 import migration001 from './001_add_role.js';
 import migration002 from './002_add_avatar.js';
 import migration003 from './003_add_author_id.js';
+import migration004 from './004_rename_admin_to_users.js';
 
 // Ordered migration registry. Add new migrations here in ascending version
 // order. Imports are static (not dynamic) so migrations run synchronously —
 // node:sqlite is synchronous and getDb() must return a fully-migrated schema.
-const MIGRATIONS = [migration001, migration002, migration003].sort((a, b) => a.version - b.version);
+const MIGRATIONS = [migration001, migration002, migration003, migration004].sort(
+  (a, b) => a.version - b.version
+);
 
 function ensureMigrationsTable(db) {
   db.exec(
