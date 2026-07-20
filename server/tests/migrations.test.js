@@ -8,6 +8,7 @@ import migration003 from '../src/migrations/003_add_author_id.js';
 import migration004 from '../src/migrations/004_rename_admin_to_users.js';
 import migration005 from '../src/migrations/005_add_posts_author_fk.js';
 import migration006 from '../src/migrations/006_rename_post_author_columns.js';
+import { rewritePostsColumnRefs } from '../src/migrations/006_rename_post_author_columns.js';
 
 function makeDb() {
   const db = new DatabaseSync(':memory:');
@@ -529,6 +530,226 @@ test('migration 006 restart is idempotent (recorded once, no posts_new leftover)
   assert.ok(!columnExists(db, 'posts', 'author_id'), 'old column still absent');
   assert.equal(tableExists(db, 'posts_new'), false, 'no rebuild leftover');
 });
+
+// ---- migration 006: exact source/destination state machine ----
+
+// Build a bare posts table carrying an arbitrary set of author columns, so the
+// state machine can be exercised directly with malformed partial schemas. A
+// `users` table is present so the (never-reached) orphan check would not mask a
+// state-machine bug behind a missing-table error.
+function makePostsWith(db, authorColumnsSql) {
+  db.exec(
+    `CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at TEXT NOT NULL)`
+  );
+  db.exec(
+    `CREATE TABLE posts (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       slug TEXT UNIQUE NOT NULL,
+       title TEXT NOT NULL,
+       content TEXT NOT NULL DEFAULT ''${authorColumnsSql ? ',\n       ' + authorColumnsSql : ''}
+     )`
+  );
+}
+
+test('migration 006 rejects a partial destination: only author_display_name', () => {
+  const db = makeDb();
+  makePostsWith(db, 'author_display_name TEXT');
+  assert.throws(() => migration006.up(db), /incomplete or ambiguous/i);
+});
+
+test('migration 006 rejects a partial destination: only owner_user_id', () => {
+  const db = makeDb();
+  makePostsWith(db, 'owner_user_id INTEGER');
+  assert.throws(() => migration006.up(db), /incomplete or ambiguous/i);
+});
+
+test('migration 006 rejects a mixed schema: author + owner_user_id', () => {
+  const db = makeDb();
+  makePostsWith(db, 'author TEXT, owner_user_id INTEGER');
+  assert.throws(() => migration006.up(db), /incomplete or ambiguous/i);
+});
+
+test('migration 006 rejects a mixed schema: author_id + author_display_name', () => {
+  const db = makeDb();
+  makePostsWith(db, 'author_id INTEGER, author_display_name TEXT');
+  assert.throws(() => migration006.up(db), /incomplete or ambiguous/i);
+});
+
+test('migration 006 rejects when neither source nor destination pair is present', () => {
+  const db = makeDb();
+  makePostsWith(db, '');
+  assert.throws(() => migration006.up(db), /incomplete or ambiguous/i);
+});
+
+test('migration 006 rejects a full four-column schema (source and destination coexist)', () => {
+  const db = makeDb();
+  makePostsWith(db, 'author TEXT, author_id INTEGER, author_display_name TEXT, owner_user_id INTEGER');
+  assert.throws(() => migration006.up(db), /incomplete or ambiguous/i);
+});
+
+test('migration 006 is a direct no-op on an already-migrated destination schema', () => {
+  const db = makeDb();
+  db.exec(
+    `CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at TEXT NOT NULL)`
+  );
+  db.exec(
+    `CREATE TABLE posts (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       slug TEXT UNIQUE NOT NULL,
+       title TEXT NOT NULL,
+       author_display_name TEXT NOT NULL DEFAULT '',
+       content TEXT NOT NULL DEFAULT '',
+       owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL
+     )`
+  );
+  assert.doesNotThrow(() => migration006.up(db));
+  // Unchanged: still exactly the destination columns.
+  assert.ok(columnExists(db, 'posts', 'author_display_name'));
+  assert.ok(columnExists(db, 'posts', 'owner_user_id'));
+  assert.ok(!columnExists(db, 'posts', 'author'));
+  assert.ok(!columnExists(db, 'posts', 'author_id'));
+});
+
+// ---- migration 006: rewriting indexes/triggers that reference renamed columns ----
+
+test('migration 006 rewrites an explicit index on author_id to owner_user_id', () => {
+  const db = makeDb();
+  seedPostsForRename(db);
+  db.exec('CREATE INDEX idx_posts_owner ON posts(author_id)');
+
+  runMigrations(db, MIGRATIONS_TO_006);
+
+  const sqlRow = objectSql(db, 'index', 'idx_posts_owner');
+  assert.ok(sqlRow, 'index preserved');
+  assert.match(sqlRow.sql, /\bowner_user_id\b/, 'index now references owner_user_id');
+  assert.doesNotMatch(sqlRow.sql, /\bauthor_id\b/, 'no dangling author_id reference');
+  // The rewritten index is actually usable by the planner.
+  const plan = db.prepare('EXPLAIN QUERY PLAN SELECT id FROM posts WHERE owner_user_id = 1').all();
+  assert.ok(
+    plan.some((p) => String(p.detail || '').includes('idx_posts_owner')),
+    'rewritten index is used by the planner'
+  );
+});
+
+test('migration 006 rewrites an explicit index on author to author_display_name', () => {
+  const db = makeDb();
+  seedPostsForRename(db);
+  db.exec('CREATE INDEX idx_posts_byline ON posts(author)');
+
+  runMigrations(db, MIGRATIONS_TO_006);
+
+  const sqlRow = objectSql(db, 'index', 'idx_posts_byline');
+  assert.ok(sqlRow, 'index preserved');
+  assert.match(sqlRow.sql, /\bauthor_display_name\b/, 'index now references author_display_name');
+  assert.doesNotMatch(sqlRow.sql, /\bauthor\b/, 'no dangling bare author reference');
+});
+
+test('migration 006 rewrites a trigger referencing NEW.author and OLD/NEW author_id', () => {
+  const db = makeDb();
+  seedPostsForRename(db);
+  db.exec(
+    `CREATE TRIGGER posts_owner_guard AFTER UPDATE OF author_id ON posts
+     WHEN NEW.author_id IS NOT NULL
+     BEGIN
+       UPDATE posts SET author_display_name = NEW.author WHERE id = NEW.id;
+     END`
+  );
+
+  runMigrations(db, MIGRATIONS_TO_006);
+
+  const sqlRow = objectSql(db, 'trigger', 'posts_owner_guard');
+  assert.ok(sqlRow, 'trigger preserved');
+  assert.match(sqlRow.sql, /\bowner_user_id\b/, 'trigger now references owner_user_id');
+  assert.match(sqlRow.sql, /\bauthor_display_name\b/, 'trigger now references author_display_name');
+  assert.doesNotMatch(sqlRow.sql, /\bauthor_id\b/, 'no dangling author_id reference');
+  assert.doesNotMatch(sqlRow.sql, /\bauthor\b/, 'no dangling bare author reference');
+});
+
+test('migration 006 does not corrupt unrelated object names or string literals', () => {
+  const db = makeDb();
+  seedPostsForRename(db);
+  // An index whose NAME contains "author" but whose column is unrelated.
+  db.exec('CREATE INDEX idx_author_history ON posts(status)');
+  // A trigger whose body carries a string literal mentioning the old columns.
+  db.exec('CREATE TABLE notes (msg TEXT)');
+  db.exec(
+    `CREATE TRIGGER posts_note AFTER DELETE ON posts
+     BEGIN
+       INSERT INTO notes (msg) VALUES ('author_id and author stay literal');
+     END`
+  );
+
+  runMigrations(db, MIGRATIONS_TO_006);
+
+  const idx = objectSql(db, 'index', 'idx_author_history');
+  assert.ok(idx, 'named-with-author index preserved');
+  assert.match(idx.sql, /idx_author_history/, 'index name not corrupted');
+  assert.match(idx.sql, /\bstatus\b/, 'unrelated column left alone');
+  assert.doesNotMatch(idx.sql, /owner_user_id|author_display_name/, 'no spurious rewrite in index');
+
+  const trg = objectSql(db, 'trigger', 'posts_note');
+  assert.ok(trg, 'trigger preserved');
+  assert.match(trg.sql, /'author_id and author stay literal'/, 'string literal untouched');
+});
+
+test('migration 006 rolls back when a renamed-object rewrite still cannot be restored', () => {
+  const db = makeDb();
+  seedPostsForRename(db);
+  // References renamed columns (so the rewrite path runs) AND a missing table (so
+  // re-creation fails even after rewriting) — the whole migration must roll back.
+  db.exec(
+    `CREATE TRIGGER posts_bad AFTER INSERT ON posts
+     WHEN NEW.author_id IS NOT NULL
+     BEGIN
+       INSERT INTO no_such_table (x) VALUES (NEW.author);
+     END`
+  );
+
+  assert.throws(() => runMigrations(db, MIGRATIONS_TO_006));
+  // Rolled back to the pre-006 schema.
+  assert.equal(columnExists(db, 'posts', 'author_id'), true, 'author_id restored after rollback');
+  assert.equal(columnExists(db, 'posts', 'owner_user_id'), false, 'no partial rename');
+  assert.equal(tableExists(db, 'posts_new'), false);
+  assert.equal(migrationExists(db, 6), false, 'v6 not recorded on failure');
+});
+
+// ---- rewritePostsColumnRefs: unit coverage for the token/quote-aware rewriter ----
+
+test('rewritePostsColumnRefs rewrites exact bare column tokens only', () => {
+  assert.equal(rewritePostsColumnRefs('posts(author_id)'), 'posts(owner_user_id)');
+  assert.equal(rewritePostsColumnRefs('posts(author)'), 'posts(author_display_name)');
+  assert.equal(rewritePostsColumnRefs('NEW.author_id'), 'NEW.owner_user_id');
+  // Qualified references are handled per-token.
+  assert.equal(rewritePostsColumnRefs('p.author, p.author_id'), 'p.author_display_name, p.owner_user_id');
+});
+
+test('rewritePostsColumnRefs leaves partial-match identifiers alone', () => {
+  assert.equal(rewritePostsColumnRefs('idx_author_history'), 'idx_author_history');
+  assert.equal(rewritePostsColumnRefs('author_display_name'), 'author_display_name');
+  assert.equal(rewritePostsColumnRefs('coauthor'), 'coauthor');
+  assert.equal(rewritePostsColumnRefs('author_ids'), 'author_ids');
+});
+
+test('rewritePostsColumnRefs never touches string literals', () => {
+  assert.equal(
+    rewritePostsColumnRefs("VALUES ('author', 'author_id')"),
+    "VALUES ('author', 'author_id')"
+  );
+  // Bareword outside the literal still rewrites; the literal is preserved.
+  assert.equal(
+    rewritePostsColumnRefs("author = 'author_id'"),
+    "author_display_name = 'author_id'"
+  );
+});
+
+test('rewritePostsColumnRefs rewrites quoted identifiers that exactly match', () => {
+  assert.equal(rewritePostsColumnRefs('"author_id"'), '"owner_user_id"');
+  assert.equal(rewritePostsColumnRefs('`author`'), '`author_display_name`');
+  assert.equal(rewritePostsColumnRefs('[author_id]'), '[owner_user_id]');
+  // A quoted identifier that only partially matches is left intact.
+  assert.equal(rewritePostsColumnRefs('"idx_author_history"'), '"idx_author_history"');
+});
+
 
 
 
