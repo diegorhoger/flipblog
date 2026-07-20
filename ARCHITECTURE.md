@@ -137,9 +137,11 @@ digraph flipblog {
 - `npm run lint` syntax-checks every source/test file in both packages.
 
 ## Extension points
-- **Roles & permissions**: the `admin` table already has a `role` column (`admin`/`author`) and
-  `requireRole('admin')` guards the registration endpoint. Extend it with finer-grained permissions or
-  per-post authorship (link `posts.author_id` to `admin.id`).
+- **Roles & permissions**: the `users` table (renamed from `admin` by migration 004) has a `role`
+  column (`admin`/`author`) and `requireRole('admin')` guards the registration endpoint. Extend it
+  with finer-grained permissions or per-post authorship (link `posts.owner_user_id` to `users.id`).
+  The display byline is a separate `posts.author_display_name` column; `owner_user_id` is the
+  authenticated-account ownership foreign key and is never exposed via the public API.
 - **Categories / tags**: new columns + `services/posts.js` filters; expose in the list API.
 - **Comments / reactions**: new table + routes; render in `reader.js`.
 - **Rich media pages**: `components/editor.js` can be extended with image/video embeds; `sanitize-html` allow-list

@@ -194,3 +194,28 @@ test('ownership: a non-owner author cannot delete another author’s post', asyn
   const ownerDelete = await owner.delete(`/api/posts/${id}`);
   assert.equal(ownerDelete.status, 204);
 });
+
+test('public post responses expose author but not internal columns', async () => {
+  const agent = await authedAgent();
+  const created = await agent.post('/api/posts').send({
+    title: 'Byline test',
+    author: 'Byline Author',
+    content: '<p>hi</p>',
+    status: 'published',
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.body.author, 'Byline Author', 'public author field returns the display name');
+  assert.equal('author_display_name' in created.body, false, 'internal column not exposed');
+  assert.equal('owner_user_id' in created.body, false, 'ownership not exposed');
+
+  const fetched = await request(app).get(`/api/posts/${created.body.slug}`);
+  assert.equal(fetched.body.author, 'Byline Author');
+  assert.equal('author_display_name' in fetched.body, false);
+  assert.equal('owner_user_id' in fetched.body, false);
+
+  const list = await request(app).get('/api/posts');
+  const item = list.body.items.find((p) => p.slug === created.body.slug);
+  assert.ok(item, 'created post appears in the list');
+  assert.equal(item.author, 'Byline Author');
+  assert.equal('owner_user_id' in item, false);
+});

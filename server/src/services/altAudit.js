@@ -180,7 +180,7 @@ export function auditPostContent(html) {
 /**
  * Audit alt text across the posts an actor is allowed to manage.
  *   - Admins see findings for every post.
- *   - Non-admin authors see findings only for posts they own (author_id).
+ *   - Non-admin authors see findings only for posts they own (owner_user_id).
  * Results are grouped per affected post and paginated over the set of posts that
  * actually have findings. Only safe public metadata is returned; filesystem
  * paths, database internals, and raw content are never exposed.
@@ -200,7 +200,7 @@ export function auditAltText({ actor, page = 1, limit = 20 } = {}) {
           .all()
       : db
           .prepare(
-            'SELECT id, title, slug, content FROM posts WHERE author_id = ? ORDER BY updated_at DESC'
+            'SELECT id, title, slug, content FROM posts WHERE owner_user_id = ? ORDER BY updated_at DESC'
           )
           .all(Number(actor.sub));
 

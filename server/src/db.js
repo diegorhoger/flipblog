@@ -16,6 +16,12 @@ import { runMigrations } from './migrations/index.js';
 // two tables and fail closed). On a legacy database `admin` already exists, and
 // on a fresh one it is created here and renamed — in neither case does a stray
 // `admin` survive after `users` exists.
+//
+// The baseline `posts` table uses the historical column names (author,
+// author_id). Migration 003 adds author_id, migration 005 adds its foreign key,
+// and migration 006 renames both to author_display_name / owner_user_id. A fresh
+// database follows this same sequence; the baseline is intentionally left
+// historical so migrations 003/005 continue to operate on author_id.
 const BASELINE_POSTS = `
 CREATE TABLE IF NOT EXISTS posts (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
