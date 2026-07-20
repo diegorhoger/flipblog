@@ -31,6 +31,17 @@ function appliedVersions(db) {
   return new Set(db.prepare('SELECT version FROM schema_migrations').all().map((r) => r.version));
 }
 
+// Returns the migrations not yet recorded as applied. Used by the startup path
+// to decide whether an upgrade (and therefore a pre-migration backup) is
+// actually happening — an ordinary restart with nothing pending must not create
+// a backup, or every reboot would mint five identical copies and call it
+// resilience. Exported so callers can probe without running migrations.
+export function getPendingMigrations(db, migrations = MIGRATIONS) {
+  ensureMigrationsTable(db);
+  const applied = appliedVersions(db);
+  return migrations.filter((m) => !applied.has(m.version));
+}
+
 function validateUniqueVersions(migrations) {
   const seen = new Set();
   for (const m of migrations) {

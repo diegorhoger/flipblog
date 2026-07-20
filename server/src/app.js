@@ -11,6 +11,7 @@ import authRoutes from './routes/auth.js';
 import postRoutes from './routes/posts.js';
 import uploadRoutes from './routes/uploads.js';
 import auditRoutes from './routes/audit.js';
+import { healthRouter } from './routes/health.js';
 
 function parseCookies(req, res, next) {
   req.cookies = {};
@@ -44,7 +45,9 @@ export function createApp() {
     next();
   });
 
-  app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
+  // Liveness/readiness probes. /api/health (and /api/health/live) report the
+  // process is alive; /api/health/ready confirms the database is sound.
+  app.use('/api/health', healthRouter);
   app.use('/api/auth', authRoutes);
   app.use('/api/posts', postRoutes);
   app.use('/api/uploads', uploadRoutes);

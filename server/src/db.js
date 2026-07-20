@@ -2,7 +2,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { config, isMemoryDb } from './config.js';
-import { runMigrations } from './migrations/index.js';
+import { runMigrations, getPendingMigrations } from './migrations/index.js';
+import { backupDatabase, defaultBackupDir } from './db-backup.js';
+import { checkDatabaseHealth, getCurrentSchemaVersion } from './db-health.js';
 
 // Minimal baseline schema. All later structure (role, avatar, author_id,
 // category/tags/page_count, comments, indexes) is applied by ordered, versioned
@@ -60,6 +62,7 @@ export function getDb() {
     db.exec('PRAGMA busy_timeout = 5000;');
   }
   db.exec('PRAGMA foreign_keys = ON;');
+
   db.exec(BASELINE_POSTS);
   // Only seed the legacy `admin` table when `users` does not yet exist. After
   // migration 004 has renamed it, `users` is the canonical accounts table and
@@ -70,7 +73,42 @@ export function getDb() {
   if (!hasUsers) {
     db.exec(BASELINE_ADMIN);
   }
+
+  // Snapshot the live database only when an upgrade is actually about to happen.
+  // The baseline schema is already in place (a no-op on an existing database),
+  // so the backup is a coherent, openable pre-upgrade snapshot. Transactional
+  // migrations protect against SQL failure, but not against filesystem
+  // corruption, operator mistakes, or deploying against the wrong file — the
+  // backup is the safety net for those, so a failed upgrade can always be rolled
+  // back. An ordinary restart with no pending migrations backs up nothing:
+  // minting a copy of an unchanged database on every reboot is not resilience.
+  // Skipped entirely for in-memory / test runs.
+  const pending = getPendingMigrations(db);
+  if (config.dbBackupEnabled && !isMemoryDb && pending.length > 0) {
+    const preVersion = getCurrentSchemaVersion(db);
+    const backupDir = config.dbBackupDir || defaultBackupDir(config.dbPath);
+    backupDatabase(db, {
+      dbPath: config.dbPath,
+      backupDir,
+      version: preVersion,
+      retention: config.dbBackupRetention,
+    });
+  }
+
   runMigrations(db);
+
+  // Fail closed on a broken database. A half-applied migration already throws
+  // inside runMigrations; this guards the other failure modes — a corrupt page,
+  // a dangling foreign key, or a drifted schema version. We must not serve
+  // requests on a database that cannot be trusted.
+  const health = checkDatabaseHealth(db);
+  if (!health.ok) {
+    const reason = health.checks.migrationVersion.missing.length
+      ? `missing migrations: ${health.checks.migrationVersion.missing.join(', ')}`
+      : 'integrity_check or foreign_key_check failed';
+    throw new Error(`Database health check failed: ${reason}`);
+  }
+
   return db;
 }
 
