@@ -48,6 +48,30 @@ export function getPendingMigrations(db, migrations = MIGRATIONS) {
   return migrations.filter((m) => !applied.has(m.version));
 }
 
+// READ-ONLY inspection of the migration ledger. Never creates `schema_migrations`
+// or writes anything else, so startup can reject an unknown future schema BEFORE
+// making any change to the database. `unexpected` holds applied versions this
+// build does not recognise (i.e. a newer build migrated this database); an older
+// build must refuse to start against it rather than mutate a schema it cannot
+// understand. `missing` holds expected versions not yet applied.
+export function inspectMigrationState(db, migrations = MIGRATIONS) {
+  const hasMigrationTable = !!db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_migrations'")
+    .get();
+  const appliedSet = hasMigrationTable
+    ? new Set(db.prepare('SELECT version FROM schema_migrations').all().map((r) => r.version))
+    : new Set();
+  const registryVersions = new Set(migrations.map((m) => m.version));
+  const missing = migrations.filter((m) => !appliedSet.has(m.version)).map((m) => m.version);
+  const unexpected = [...appliedSet].filter((v) => !registryVersions.has(v)).sort((a, b) => a - b);
+  return {
+    hasMigrationTable,
+    applied: [...appliedSet].sort((a, b) => a - b),
+    missing,
+    unexpected,
+  };
+}
+
 function validateUniqueVersions(migrations) {
   const seen = new Set();
   for (const m of migrations) {

@@ -2,9 +2,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { config, isMemoryDb } from './config.js';
-import { runMigrations, getPendingMigrations } from './migrations/index.js';
+import { runMigrations, inspectMigrationState } from './migrations/index.js';
 import { backupDatabase, defaultBackupDir } from './db-backup.js';
-import { checkDatabaseHealth, getCurrentSchemaVersion } from './db-health.js';
+import { checkDatabaseHealth } from './db-health.js';
 
 // Minimal baseline schema. All later structure (role, avatar, author_id,
 // category/tags/page_count, comments, indexes) is applied by ordered, versioned
@@ -63,21 +63,33 @@ export function getDb() {
   }
   db.exec('PRAGMA foreign_keys = ON;');
 
-  // Determine pending migrations WITHOUT writing to the database, then snapshot
-  // the live file *before* any baseline or migration writes. The backup is taken
-  // at this point so it captures the on-disk state exactly as the process found
-  // it — baseline tables, the legacy `admin` rename, and `schema_migrations`
-  // creation all happen afterwards. On a fresh database the snapshot is empty;
-  // on an existing one it is a faithful pre-upgrade copy. Transactional
-  // migrations protect against SQL failure, but not against filesystem
-  // corruption, operator mistakes, or deploying against the wrong file — the
-  // backup is the safety net for those, so a failed upgrade can always be rolled
-  // back. A backup is taken only when an upgrade is actually pending: an ordinary
-  // restart with nothing to migrate backs up nothing (minting five copies of an
-  // unchanged database is not resilience). Skipped for in-memory / test runs.
-  const pending = getPendingMigrations(db);
+  // Preflight migration-state inspection, READ-ONLY. Reject an unknown future
+  // schema BEFORE making any change to the database: an older build must not
+  // mutate a database migrated by a newer build. This runs before the baseline,
+  // the legacy admin seed, schema_migrations creation, the backup, and the
+  // migrations themselves.
+  const state = inspectMigrationState(db);
+  if (state.unexpected.length > 0) {
+    throw new Error(
+      `Refusing to start: database has unknown future migration version(s) ${state.unexpected.join(
+        ', '
+      )} — an older build cannot open a newer schema`
+    );
+  }
+
+  // Snapshot the live file *before* any baseline or migration writes, but only
+  // when an upgrade is actually pending. The backup captures the on-disk state
+  // exactly as the process found it — baseline tables, the legacy `admin` rename,
+  // and `schema_migrations` creation all happen afterwards. On a fresh database
+  // the snapshot is empty; on an existing one it is a faithful pre-upgrade copy.
+  // Transactional migrations protect against SQL failure, but not against
+  // filesystem corruption, operator mistakes, or deploying against the wrong file
+  // — the backup is the safety net for those, so a failed upgrade can always be
+  // rolled back. An ordinary restart with nothing to migrate backs up nothing.
+  // Skipped for in-memory / test runs.
+  const pending = state.missing;
   if (config.dbBackupEnabled && !isMemoryDb && pending.length > 0) {
-    const preVersion = getCurrentSchemaVersion(db);
+    const preVersion = state.applied.length ? Math.max(...state.applied) : 0;
     const backupDir = config.dbBackupDir || defaultBackupDir(config.dbPath);
     backupDatabase(db, {
       dbPath: config.dbPath,
@@ -106,9 +118,12 @@ export function getDb() {
   // requests on a database that cannot be trusted.
   const health = checkDatabaseHealth(db);
   if (!health.ok) {
-    const reason = health.checks.migrationVersion.missing.length
-      ? `missing migrations: ${health.checks.migrationVersion.missing.join(', ')}`
-      : 'integrity_check or foreign_key_check failed';
+    const mv = health.checks.migrationVersion;
+    const reason = mv.unexpected.length
+      ? `unknown future migration version(s): ${mv.unexpected.join(', ')}`
+      : mv.missing.length
+        ? `missing migration version(s): ${mv.missing.join(', ')}`
+        : 'integrity_check or foreign_key_check failed';
     throw new Error(`Database health check failed: ${reason}`);
   }
 

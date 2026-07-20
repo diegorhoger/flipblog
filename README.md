@@ -208,7 +208,10 @@ database.
 3. **Only if an upgrade is pending**, it snapshots the live database — exactly as it exists on disk
    *before* any startup write — into a sibling `backups/` directory (see below). This is your rollback
    point if the upgrade fails. An ordinary restart with nothing to migrate backs up nothing.
-4. The baseline schema and ordered, versioned migrations run inside a single transaction.
+ 4. The baseline schema (`BASELINE_POSTS`, and the legacy `admin` table when `users` is absent) is
+    written first. Then the ordered, versioned migrations run — and **only the pending migration
+    bodies and their `schema_migrations` ledger inserts are wrapped in a single `BEGIN IMMEDIATE`
+    transaction**. `ensureMigrationsTable()` itself runs before that transaction.
 5. A health check runs: `PRAGMA integrity_check`, `PRAGMA foreign_key_check`, a verification that
    every expected migration version is recorded, **and** that no unrecognised (future) migration
    version is present. **If any check fails the process exits non-zero** — it will not serve requests
@@ -264,10 +267,13 @@ precision timestamp makes the filenames sort chronologically, and retention keep
 
 ### Rollback procedure
 
-- If a new deployment's migrations fail, the process refuses to start (fail-closed). The migration ran
-  inside a single transaction and is rolled back, leaving the database as it was before this startup's
-  writes; the pre-upgrade backup taken at step 3 is also available if you prefer an explicit known-good
-  copy. Restore the backup and redeploy the previous build.
+- If a pending migration fails, the process refuses to start (fail-closed). The migration ran inside
+  a single transaction, so the pending migration bodies and their `schema_migrations` inserts are rolled
+  back together, leaving the database as it was before this startup's migration step. (The baseline
+  tables written at step 4 are not part of that transaction and are not rolled back — they are
+  idempotent `CREATE TABLE IF NOT EXISTS` statements, so re-running startup is safe.) The pre-upgrade
+  backup taken at step 3 is also available if you prefer an explicit known-good copy. Restore the backup
+  and redeploy the previous build.
 - Keep the previous server build/container image available so you can redeploy it against the restored
   database.
 

@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, existsSync, writeFileSync, readdirSync, mkdirSync 
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import express from 'express';
 import request from 'supertest';
 import { DatabaseSync } from 'node:sqlite';
@@ -150,7 +150,7 @@ test('pruneBackups keeps the chronologically newest across mixed schema versions
   cleanup(dir);
 });
 
-test('backupDatabase avoids same-second filename collisions deterministically', () => {
+test('backupDatabase gives same-second attempts distinct, restorable names', () => {
   const dir = newDir('fb-collide-');
   const file = join(dir, 'app.db');
   const db = makeOnDiskDb(file);
@@ -159,11 +159,14 @@ test('backupDatabase avoids same-second filename collisions deterministically', 
   const ts = '20260720T153001.000Z';
   const r1 = backupDatabase(db, { dbPath: file, backupDir: bdir, version: 6, retention: 5, ts });
   const r2 = backupDatabase(db, { dbPath: file, backupDir: bdir, version: 6, retention: 5, ts });
-  assert.notEqual(r1.backupPath, r2.backupPath, 'two backups in the same ms get distinct names');
-  assert.ok(
-    parseBackupName(r2.name)?.collision === 1,
-    'second backup gets a deterministic collision suffix'
-  );
+  assert.notEqual(r1.name, r2.name, 'two backups in the same ms get distinct names');
+  assert.notEqual(r1.backupPath, r2.backupPath);
+  // Both are independently restorable.
+  for (const r of [r1, r2]) {
+    const copy = new DatabaseSync(r.backupPath);
+    assert.equal(copy.prepare('SELECT v FROM t WHERE id = 1').get().v, 'hello');
+    copy.close();
+  }
   db.close();
   cleanup(dir);
 });
@@ -399,5 +402,92 @@ test('a restart with no pending migrations creates no backup (real process)', ()
   const secondSummary = JSON.parse(second.stderr);
   assert.equal(secondSummary.backups.length, 1, 'restart with no pending migrations adds no backup');
 
+  cleanup(dir);
+});
+
+// Runs the backup-once fixture in its own process and resolves on exit.
+function runBackupOnce(env) {
+  return new Promise((resolve) => {
+    const child = spawn(
+      process.execPath,
+      ['--no-warnings', join(SERVER_ROOT, 'tests', 'fixtures', 'backup-once.js')],
+      { cwd: SERVER_ROOT, env }
+    );
+    let out = '';
+    let err = '';
+    child.stdout.on('data', (d) => (out += d));
+    child.stderr.on('data', (d) => (err += d));
+    child.on('close', (code) => resolve({ code, out, err }));
+  });
+}
+
+test('startup refuses an unknown future migration before any database write (real process)', () => {
+  const dir = newDir('fb-future-');
+  const dbFile = join(dir, 'data.db');
+
+  // A database migrated by a NEWER build: every version this build knows, plus
+  // an unknown future migration 999. No baseline tables yet, so we can also prove
+  // the startup wrote nothing.
+  const seed = new DatabaseSync(dbFile);
+  seed.exec(
+    'CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)'
+  );
+  for (const v of [1, 2, 3, 4, 5, 6, 999]) {
+    seed.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(v, `m${v}`, '2026');
+  }
+  seed.exec('CREATE TABLE marker (id INTEGER PRIMARY KEY, v TEXT)');
+  seed.prepare('INSERT INTO marker (v) VALUES (?)').run('intact');
+  seed.close();
+
+  const result = spawnSync(process.execPath, ['--no-warnings', join(SERVER_ROOT, 'tests', 'fixtures', 'startup-backup.js')], {
+    cwd: SERVER_ROOT,
+    env: {
+      ...process.env,
+      DB_PATH: dbFile,
+      NODE_ENV: 'production',
+      DB_BACKUP_ENABLED: 'true',
+    },
+    encoding: 'utf8',
+  });
+  assert.notEqual(result.status, 0, 'an older build must refuse a database with an unknown future migration');
+
+  // Crucially, the rejection happened BEFORE any startup write:
+  const after = new DatabaseSync(dbFile);
+  assert.ok(!after.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").get(), 'users must not be created');
+  assert.ok(!after.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='posts'").get(), 'posts baseline must not be created');
+  assert.ok(!after.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='admin'").get(), 'admin baseline must not be created');
+  assert.equal(after.prepare('SELECT v FROM marker WHERE id = 1').get().v, 'intact', 'marker row untouched');
+  const versions = after.prepare('SELECT version FROM schema_migrations ORDER BY version').all().map((r) => r.version);
+  assert.deepEqual(versions, [1, 2, 3, 4, 5, 6, 999], 'schema_migrations unchanged');
+  after.close();
+
+  // No backup was taken, because no upgrade was ever attempted.
+  assert.ok(!existsSync(join(dirname(dbFile), 'backups')), 'no backup when startup is refused pre-write');
+  cleanup(dir);
+});
+
+test('concurrent backups in separate processes are race-safe (real processes)', async () => {
+  const dir = newDir('fb-concurrent-');
+  const dbFile = join(dir, 'app.db');
+  makeOnDiskDb(dbFile); // shared source database with data
+  const bdir = join(dir, 'backups');
+  mkdirSync(bdir, { recursive: true });
+  const ts = '20260720T153001.000Z';
+  const env = { ...process.env, DB_PATH: dbFile, BACKUP_DIR: bdir, VERSION: '6', TS: ts, RETENTION: '5' };
+
+  // Two processes, same timestamp/version/backup dir, launched at once.
+  const [a, b] = await Promise.all([runBackupOnce(env), runBackupOnce(env)]);
+  assert.equal(a.code, 0, a.err);
+  assert.equal(b.code, 0, b.err);
+
+  const files = readdirSync(bdir).filter((n) => n.startsWith('flipblog-pre-v'));
+  assert.equal(files.length, 2, 'two distinct backup files created, none overwritten');
+  assert.notEqual(files[0], files[1], 'the two backups have different names');
+
+  for (const f of files) {
+    const copy = new DatabaseSync(join(bdir, f));
+    assert.equal(copy.prepare('SELECT v FROM t WHERE id = 1').get().v, 'hello', 'each backup is restorable');
+    copy.close();
+  }
   cleanup(dir);
 });

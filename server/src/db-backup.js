@@ -9,18 +9,26 @@ import { logger } from './logging.js';
 // is the v6 state we snapshot before applying v7). Restoring it returns the
 // database to the last known-good, pre-upgrade state.
 //
-// The timestamp is embedded directly in the filename at millisecond precision
-// and is fixed-width, so it is lexicographically sortable as a true chronological
-// order. Retention therefore sorts by the *parsed timestamp*, never by the full
-// filename (whose leading version would otherwise misorder v9 vs v10). A
-// deterministic `-N` collision suffix is appended only when two backups would
-// otherwise share a name (same version + same millisecond).
+// The timestamp is embedded at millisecond precision and is fixed-width, so it
+// sorts chronologically as text. Retention sorts by the *parsed timestamp*,
+// never by the full filename (whose leading version would otherwise misorder
+// v9 vs v10). To make concurrent backups race-safe, every attempt appends a
+// process-unique suffix (`<pid>-<seq>`); because the suffix is unique per
+// process and per attempt, two simultaneous startups can never choose the same
+// final name or share a temp file — there is no time-of-check/time-of-use race
+// to reserve, and no backup overwrites another.
 
 const BACKUP_PREFIX = 'flipblog-pre-v';
 const BACKUP_SUFFIX = '.db';
 
-// flipblog-pre-v<version>-<YYYYMMDDThhmmss.SSSZ>[ -<collision>].db
-const NAME_RE = /^flipblog-pre-v(\d+)-(\d{8}T\d{6}\.\d{3}Z)(?:-(\d+))?\.db$/;
+// flipblog-pre-v<version>-<YYYYMMDDThhmmss.SSSZ>[-<pid>-<seq>].db
+const NAME_RE = /^flipblog-pre-v(\d+)-(\d{8}T\d{6}\.\d{3}Z)(?:-([A-Za-z0-9-]+))?\.db$/;
+
+let backupSeq = 0;
+function nextSuffix() {
+  backupSeq += 1;
+  return `${process.pid}-${backupSeq}`;
+}
 
 function escapeSqliteString(value) {
   // SQLite string literals use '' to escape a single quote; backslashes are
@@ -34,16 +42,17 @@ export function timestampToken(d = new Date()) {
   return d.toISOString().replace(/[-:]/g, '');
 }
 
-export function backupFileName(version, ts = timestampToken(), collision = 0) {
-  const stamp = `${BACKUP_PREFIX}${version}-${ts}`;
-  return collision > 0 ? `${stamp}-${collision}${BACKUP_SUFFIX}` : `${stamp}${BACKUP_SUFFIX}`;
+// Base backup name WITHOUT the uniqueness suffix (used by tests and for the
+// canonical `flipblog-pre-v<version>-<ts>.db` form).
+export function backupFileName(version, ts = timestampToken()) {
+  return `${BACKUP_PREFIX}${version}-${ts}${BACKUP_SUFFIX}`;
 }
 
 // Parses a backup filename into its parts. Returns `null` for non-backup names.
 export function parseBackupName(name) {
   const m = NAME_RE.exec(name);
   if (!m) return null;
-  return { version: Number(m[1]), ts: m[2], collision: m[3] ? Number(m[3]) : 0 };
+  return { version: Number(m[1]), ts: m[2], suffix: m[3] ?? null };
 }
 
 // A backup is only meaningful for a real, persisted database. In-memory
@@ -64,6 +73,10 @@ export function defaultBackupDir(dbPath) {
 // path, or `null` when no backup is applicable. Throws only on a genuine backup
 // failure so the caller can fail the startup closed rather than silently
 // proceeding with no safety net. `ts` is injectable for deterministic tests.
+//
+// The final name and the temp file both carry a process-unique suffix, so two
+// concurrent backup attempts can never collide on the destination or share a
+// temp file — no `existsSync`-then-`rename` reservation race exists.
 export function backupDatabase(
   db,
   { dbPath, backupDir, version = 0, retention = 5, enabled = true, ts, log = logger } = {}
@@ -72,18 +85,9 @@ export function backupDatabase(
 
   mkdirSync(backupDir, { recursive: true });
   const stamp = ts || timestampToken();
-
-  // Resolve a free destination name. Two backups for the same pre-migration
-  // version within the same millisecond would otherwise collide; we append a
-  // deterministic `-N` suffix instead of overwriting the prior recovery copy.
-  let finalName = backupFileName(version, stamp);
-  let finalPath = join(backupDir, finalName);
-  let collision = 0;
-  while (existsSync(finalPath)) {
-    collision += 1;
-    finalName = backupFileName(version, stamp, collision);
-    finalPath = join(backupDir, finalName);
-  }
+  const suffix = nextSuffix();
+  const finalName = `${BACKUP_PREFIX}${version}-${stamp}-${suffix}${BACKUP_SUFFIX}`;
+  const finalPath = join(backupDir, finalName);
   const tmpPath = join(backupDir, `.${finalName}.tmp`);
 
   try {
@@ -115,7 +119,8 @@ export function backupDatabase(
 // Keeps only the newest `retention` backups; older snapshots are removed. Order
 // is determined by the *parsed timestamp* (version is irrelevant to recency and
 // only a tie-breaker), so a v6 backup from today is never pruned in favour of a
-// v10 backup from last year. Returns the surviving and removed names.
+// v10 backup from last year. When timestamps tie, the full name breaks the tie
+// deterministically. Returns the surviving and removed names.
 export function pruneBackups(backupDir, retention = 5, log = logger) {
   let names = [];
   try {
@@ -125,9 +130,15 @@ export function pruneBackups(backupDir, retention = 5, log = logger) {
   }
   const parsed = names.map((name) => {
     const p = parseBackupName(name);
-    return { name, ts: p.ts, version: p.version, collision: p.collision };
+    return { name, ts: p.ts, version: p.version, suffix: p.suffix };
   });
-  parsed.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.collision - b.collision));
+  parsed.sort((a, b) => {
+    if (a.ts < b.ts) return -1;
+    if (a.ts > b.ts) return 1;
+    if (a.name < b.name) return -1;
+    if (a.name > b.name) return 1;
+    return 0;
+  });
 
   const removeCount = Math.max(0, parsed.length - retention);
   const toRemove = parsed.slice(0, removeCount);
