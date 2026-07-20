@@ -3,6 +3,7 @@ import migration002 from './002_add_avatar.js';
 import migration003 from './003_add_author_id.js';
 import migration004 from './004_rename_admin_to_users.js';
 import migration005 from './005_add_posts_author_fk.js';
+import migration006 from './006_rename_post_author_columns.js';
 
 // Ordered migration registry. Add new migrations here in ascending version
 // order. Imports are static (not dynamic) so migrations run synchronously —
@@ -13,6 +14,7 @@ export const MIGRATIONS = [
   migration003,
   migration004,
   migration005,
+  migration006,
 ].sort((a, b) => a.version - b.version);
 
 function ensureMigrationsTable(db) {

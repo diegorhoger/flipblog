@@ -33,12 +33,13 @@ async function main() {
     .prepare('SELECT COUNT(*) AS c FROM schema_migrations WHERE version = 4')
     .get().c;
 
-  // posts.author_id -> users(id) foreign key (added by migration 005). A
-  // non-empty foreign_key_list means the constraint is declared on posts.
+  // posts.owner_user_id -> users(id) foreign key (established by migration 005,
+  // column renamed by migration 006). A non-empty foreign_key_list means the
+  // constraint is declared on posts.
   const postsFk = db
     .prepare("PRAGMA foreign_key_list(posts)")
     .all()
-    .filter((fk) => fk.table === 'users' && fk.from === 'author_id');
+    .filter((fk) => fk.table === 'users' && fk.from === 'owner_user_id');
 
   const summary = {
     tables,

@@ -280,7 +280,7 @@ test('explicit posts index is preserved through the rebuild (real startup)', () 
   cleanup(dir, dbFile);
 });
 
-test('deleting a user sets owned posts author_id to NULL (ON DELETE SET NULL)', () => {
+test('deleting a user sets owned posts owner_user_id to NULL (ON DELETE SET NULL)', () => {
   const dir = newDir('flipblog-fk-delete-');
   const dbFile = join(dir, 'data.db');
 
@@ -294,20 +294,20 @@ test('deleting a user sets owned posts author_id to NULL (ON DELETE SET NULL)', 
   const db = new DatabaseSync(dbFile);
   db.exec('PRAGMA foreign_keys = ON;');
   db.prepare(
-    'INSERT INTO posts (slug, title, author, content, status, created_at, updated_at, author_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO posts (slug, title, author_display_name, content, status, created_at, updated_at, owner_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   ).run('owned-post', 'Owned', 'Author', 'body', 'published', '2026-02-01', '2026-02-01', owner.id);
-  // Delete the owning user; the FK must null the post's author_id, not delete it.
+  // Delete the owning user; the FK must null the post's owner_user_id, not delete it.
   db.prepare('DELETE FROM users WHERE id = ?').run(owner.id);
   db.close();
 
   // Re-open via the real startup path to confirm the post survived and is now
-  // ownerless (author_id NULL) rather than gone.
+  // ownerless (owner_user_id NULL) rather than gone.
   const reopen = runStartup(dbFile, { seed: false });
   assert.equal(reopen.status, 0, reopen.stderr);
   const after = new DatabaseSync(dbFile);
-  const row = after.prepare('SELECT id, author_id FROM posts WHERE slug = ?').get('owned-post');
+  const row = after.prepare('SELECT id, owner_user_id FROM posts WHERE slug = ?').get('owned-post');
   assert.ok(row, 'post must survive its owner deletion');
-  assert.equal(row.author_id, null, 'author_id set to NULL on owner deletion');
+  assert.equal(row.owner_user_id, null, 'owner_user_id set to NULL on owner deletion');
   after.close();
 
   cleanup(dir, dbFile);

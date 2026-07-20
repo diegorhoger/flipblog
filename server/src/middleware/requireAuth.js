@@ -3,7 +3,7 @@ import { verifyJwt } from '../auth/jwt.js';
 
 // Normalize the token payload into a request user. `sub` is normalized to a
 // number so service-layer ownership checks can compare it directly against the
-// integer author_id stored in the database (JWT sub claims are strings).
+// integer owner_user_id stored in the database (JWT sub claims are strings).
 function toUser(payload) {
   return {
     username: payload.username,

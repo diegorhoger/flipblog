@@ -41,7 +41,9 @@ function publicFields(row) {
     id: row.id,
     slug: row.slug,
     title: row.title,
-    author: row.author,
+    // `author` remains the public display-name field (API compatibility); it is
+    // sourced from the author_display_name column.
+    author: row.author_display_name,
     excerpt: row.excerpt,
     cover_image: row.cover_image,
     status: row.status,
@@ -51,9 +53,9 @@ function publicFields(row) {
   };
 }
 
-// author_id is intentionally excluded from public responses. Ownership
-// decisions are made server-side using the row's author_id; it is never
-// exposed to clients.
+// owner_user_id (the foreign key to users.id) is intentionally excluded from
+// public responses. Ownership decisions are made server-side using the row's
+// owner_user_id; it is never exposed to clients.
 export function listPosts({ status = 'published', page = 1, limit = 12, actor = null } = {}) {
   const db = getDb();
   const safePage = Math.max(1, Number(page) || 1);
@@ -69,7 +71,7 @@ export function listPosts({ status = 'published', page = 1, limit = 12, actor = 
   }
   // Non-admin authors may see published posts plus their own (including drafts).
   if (actor && actor.role !== 'admin') {
-    where.push('(status = ? OR author_id = ?)');
+    where.push('(status = ? OR owner_user_id = ?)');
     params.push('published', Number(actor.sub));
   }
   const clause = where.length ? `WHERE ${where.join(' AND ')} ` : '';
@@ -120,7 +122,7 @@ export function getPostById(id, actor = null) {
 function canRead(row, actor) {
   if (!actor) return false;
   if (actor.role === 'admin') return true;
-  return row.author_id != null && Number(actor.sub) === Number(row.author_id);
+  return row.owner_user_id != null && Number(actor.sub) === Number(row.owner_user_id);
 }
 
 function hydrate(row) {
@@ -139,19 +141,19 @@ export function createPost(input = {}, actor = null) {
   const now = new Date().toISOString();
   // Ownership: the creating user's id is recorded. Falls back to null for
   // non-authenticated callers (e.g. seeded content) but normal requests pass the
-  // authenticated user. The display `author` name stays client-supplied.
-  const authorId = actor && Number.isFinite(Number(actor.sub)) ? Number(actor.sub) : null;
+  // authenticated user. The display author_display_name stays client-supplied.
+  const ownerUserId = actor && Number.isFinite(Number(actor.sub)) ? Number(actor.sub) : null;
 
   const info = db
     .prepare(
-      `INSERT INTO posts (slug, title, author, author_id, excerpt, cover_image, content, status, created_at, updated_at)
+      `INSERT INTO posts (slug, title, author_display_name, owner_user_id, excerpt, cover_image, content, status, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       slug,
       title,
       sanitizeText(input.author, 120),
-      authorId,
+      ownerUserId,
       excerpt,
       input.cover_image ? String(input.cover_image).slice(0, 500) : null,
       content,
@@ -167,7 +169,7 @@ export function createPost(input = {}, actor = null) {
 function assertCanManage(existing, actor) {
   if (!actor) throw forbidden();
   const isAdmin = actor.role === 'admin';
-  const isOwner = existing.author_id != null && Number(actor.sub) === Number(existing.author_id);
+  const isOwner = existing.owner_user_id != null && Number(actor.sub) === Number(existing.owner_user_id);
   if (!isAdmin && !isOwner) throw forbidden();
 }
 
@@ -183,7 +185,7 @@ export function updatePost(id, input = {}, actor = null) {
     input.excerpt != null
       ? sanitizeText(input.excerpt, 280)
       : existing.excerpt || excerptFromContent(content);
-  const author = input.author != null ? sanitizeText(input.author, 120) : existing.author;
+  const author = input.author != null ? sanitizeText(input.author, 120) : existing.author_display_name;
   const cover = input.cover_image !== undefined ? (input.cover_image ? String(input.cover_image).slice(0, 500) : null) : existing.cover_image;
   const status = input.status != null ? (input.status === 'draft' ? 'draft' : 'published') : existing.status;
   const slug =
@@ -193,7 +195,7 @@ export function updatePost(id, input = {}, actor = null) {
   const now = new Date().toISOString();
 
   db.prepare(
-    `UPDATE posts SET slug=?, title=?, author=?, excerpt=?, cover_image=?, content=?, status=?, updated_at=?
+    `UPDATE posts SET slug=?, title=?, author_display_name=?, excerpt=?, cover_image=?, content=?, status=?, updated_at=?
      WHERE id=?`
   ).run(slug, title, author, excerpt, cover, content, status, now, existing.id);
 
