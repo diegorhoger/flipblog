@@ -1,5 +1,5 @@
-import { mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { logger } from './logging.js';
 
 // --- Backup naming ----------------------------------------------------------
@@ -7,13 +7,20 @@ import { logger } from './logging.js';
 // A backup is taken BEFORE pending migrations run, so its name records the
 // schema version we are about to migrate *from* (e.g. `flipblog-pre-v6-...db`
 // is the v6 state we snapshot before applying v7). Restoring it returns the
-// database to the last known-good, pre-upgrade state. The timestamp is embedded
-// directly in the filename as a compact, sortable UTC token so that a lexical
-// sort of the directory doubles as a chronological sort (newest last).
+// database to the last known-good, pre-upgrade state.
+//
+// The timestamp is embedded directly in the filename at millisecond precision
+// and is fixed-width, so it is lexicographically sortable as a true chronological
+// order. Retention therefore sorts by the *parsed timestamp*, never by the full
+// filename (whose leading version would otherwise misorder v9 vs v10). A
+// deterministic `-N` collision suffix is appended only when two backups would
+// otherwise share a name (same version + same millisecond).
 
 const BACKUP_PREFIX = 'flipblog-pre-v';
 const BACKUP_SUFFIX = '.db';
-const VERSION_RE = /^flipblog-pre-v(\d+)-.*\.db$/;
+
+// flipblog-pre-v<version>-<YYYYMMDDThhmmss.SSSZ>[ -<collision>].db
+const NAME_RE = /^flipblog-pre-v(\d+)-(\d{8}T\d{6}\.\d{3}Z)(?:-(\d+))?\.db$/;
 
 function escapeSqliteString(value) {
   // SQLite string literals use '' to escape a single quote; backslashes are
@@ -22,12 +29,21 @@ function escapeSqliteString(value) {
 }
 
 export function timestampToken(d = new Date()) {
-  // 20260720T153001Z — drops fractional seconds so the name stays stable.
-  return d.toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+  // 20260720T153001.123Z — toISOString always emits exactly three fractional
+  // digits, so the token is fixed-width and sorts chronologically as text.
+  return d.toISOString().replace(/[-:]/g, '');
 }
 
-export function backupFileName(version, ts = timestampToken()) {
-  return `${BACKUP_PREFIX}${version}-${ts}${BACKUP_SUFFIX}`;
+export function backupFileName(version, ts = timestampToken(), collision = 0) {
+  const stamp = `${BACKUP_PREFIX}${version}-${ts}`;
+  return collision > 0 ? `${stamp}-${collision}${BACKUP_SUFFIX}` : `${stamp}${BACKUP_SUFFIX}`;
+}
+
+// Parses a backup filename into its parts. Returns `null` for non-backup names.
+export function parseBackupName(name) {
+  const m = NAME_RE.exec(name);
+  if (!m) return null;
+  return { version: Number(m[1]), ts: m[2], collision: m[3] ? Number(m[3]) : 0 };
 }
 
 // A backup is only meaningful for a real, persisted database. In-memory
@@ -47,16 +63,27 @@ export function defaultBackupDir(dbPath) {
 // then atomically moves the temp file into place. Returns the final backup
 // path, or `null` when no backup is applicable. Throws only on a genuine backup
 // failure so the caller can fail the startup closed rather than silently
-// proceeding with no safety net.
+// proceeding with no safety net. `ts` is injectable for deterministic tests.
 export function backupDatabase(
   db,
-  { dbPath, backupDir, version = 0, retention = 5, enabled = true, log = logger } = {}
+  { dbPath, backupDir, version = 0, retention = 5, enabled = true, ts, log = logger } = {}
 ) {
   if (!isBackupApplicable(dbPath, { enabled })) return null;
 
   mkdirSync(backupDir, { recursive: true });
-  const finalName = backupFileName(version);
-  const finalPath = join(backupDir, finalName);
+  const stamp = ts || timestampToken();
+
+  // Resolve a free destination name. Two backups for the same pre-migration
+  // version within the same millisecond would otherwise collide; we append a
+  // deterministic `-N` suffix instead of overwriting the prior recovery copy.
+  let finalName = backupFileName(version, stamp);
+  let finalPath = join(backupDir, finalName);
+  let collision = 0;
+  while (existsSync(finalPath)) {
+    collision += 1;
+    finalName = backupFileName(version, stamp, collision);
+    finalPath = join(backupDir, finalName);
+  }
   const tmpPath = join(backupDir, `.${finalName}.tmp`);
 
   try {
@@ -82,24 +109,30 @@ export function backupDatabase(
     name: finalName,
     retained: pruned.retained.length,
   });
-  return { backupPath: finalPath, version, retained: pruned.retained, pruned: pruned.pruned };
+  return { backupPath: finalPath, version, name: finalName, retained: pruned.retained, pruned: pruned.pruned };
 }
 
-// Keeps only the newest `retention` backups; older snapshots are removed. The
-// embedded sortable timestamp makes lexical sort == chronological order, so we
-// keep the tail and delete the head. Returns the surviving and removed names.
+// Keeps only the newest `retention` backups; older snapshots are removed. Order
+// is determined by the *parsed timestamp* (version is irrelevant to recency and
+// only a tie-breaker), so a v6 backup from today is never pruned in favour of a
+// v10 backup from last year. Returns the surviving and removed names.
 export function pruneBackups(backupDir, retention = 5, log = logger) {
-  let entries = [];
+  let names = [];
   try {
-    entries = readdirSync(backupDir).filter((n) => VERSION_RE.test(n));
+    names = readdirSync(backupDir).filter((n) => NAME_RE.test(n));
   } catch {
     return { retained: [], pruned: [] };
   }
-  entries.sort();
-  const removeCount = Math.max(0, entries.length - retention);
-  const toRemove = entries.slice(0, removeCount);
+  const parsed = names.map((name) => {
+    const p = parseBackupName(name);
+    return { name, ts: p.ts, version: p.version, collision: p.collision };
+  });
+  parsed.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.collision - b.collision));
+
+  const removeCount = Math.max(0, parsed.length - retention);
+  const toRemove = parsed.slice(0, removeCount);
   const pruned = [];
-  for (const name of toRemove) {
+  for (const { name } of toRemove) {
     try {
       rmSync(join(backupDir, name), { force: true });
       pruned.push(name);
@@ -107,5 +140,5 @@ export function pruneBackups(backupDir, retention = 5, log = logger) {
       log.warn({ event: 'db_backup_prune_failed', name });
     }
   }
-  return { retained: entries.slice(removeCount), pruned };
+  return { retained: parsed.slice(removeCount).map((p) => p.name), pruned };
 }

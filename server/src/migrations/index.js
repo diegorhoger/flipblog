@@ -35,9 +35,15 @@ function appliedVersions(db) {
 // to decide whether an upgrade (and therefore a pre-migration backup) is
 // actually happening — an ordinary restart with nothing pending must not create
 // a backup, or every reboot would mint five identical copies and call it
-// resilience. Exported so callers can probe without running migrations.
+// resilience. This is READ-ONLY: it never creates `schema_migrations`, so the
+// caller can determine pending state before taking the backup (the backup must
+// predate every startup schema write). Exported so callers can probe without
+// running or mutating migrations.
 export function getPendingMigrations(db, migrations = MIGRATIONS) {
-  ensureMigrationsTable(db);
+  const has = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_migrations'")
+    .get();
+  if (!has) return [...migrations];
   const applied = appliedVersions(db);
   return migrations.filter((m) => !applied.has(m.version));
 }

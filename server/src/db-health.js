@@ -2,11 +2,12 @@ import { MIGRATIONS } from './migrations/index.js';
 
 // --- Schema version helpers -------------------------------------------------
 //
-// The "current" version of a live database is the highest `version` recorded in
-// `schema_migrations`. The "expected" version is the highest version present in
-// the migration registry compiled into this build — i.e. the version the code
-// believes the database should have reached. A healthy database has every
-// registry migration recorded.
+// The "expected" versions are those present in the migration registry compiled
+// into this build. A healthy database must have applied every expected version
+// AND must not contain any applied version the build does not recognise — an
+// unrecognised version means a newer build migrated this database, and letting
+// an older build start against it is exactly the downgrade / schema-drift
+// failure a version gate exists to prevent.
 
 export function getCurrentSchemaVersion(db) {
   const has = db
@@ -29,10 +30,11 @@ export function getExpectedSchemaVersion() {
 //
 //   integrity       — PRAGMA integrity_check returns only `ok` rows
 //   foreignKeys     — PRAGMA foreign_key_check returns no violation rows
-//   migrationVersion— every registry migration is recorded as applied
+//   migrationVersion— every expected version applied AND no unknown version applied
 //
-// `ok` is true only when all three checks pass.
-export function checkDatabaseHealth(db) {
+// `ok` is true only when all checks pass and both `missing` and `unexpected`
+// are empty. Migration versions are not assumed to be contiguous.
+export function checkDatabaseHealth(db, migrations = MIGRATIONS) {
   const integrityRows = db.prepare('PRAGMA integrity_check').all();
   const integrity =
     integrityRows.length > 0 && integrityRows.every((r) => r.integrity_check === 'ok');
@@ -43,16 +45,21 @@ export function checkDatabaseHealth(db) {
   const appliedSet = new Set(
     db.prepare('SELECT version FROM schema_migrations').all().map((r) => r.version)
   );
-  const missing = MIGRATIONS.filter((m) => !appliedSet.has(m.version)).map((m) => m.version);
+  const registryVersions = new Set(migrations.map((m) => m.version));
+  const missing = migrations.filter((m) => !appliedSet.has(m.version)).map((m) => m.version);
+  const unexpected = [...appliedSet]
+    .filter((v) => !registryVersions.has(v))
+    .sort((a, b) => a - b);
 
   const migrationVersion = {
-    expected: getExpectedSchemaVersion(),
+    expected: migrations.reduce((max, m) => Math.max(max, m.version), 0),
     applied: [...appliedSet].sort((a, b) => a - b),
     missing,
+    unexpected,
   };
 
   return {
-    ok: integrity && foreignKeys && missing.length === 0,
+    ok: integrity && foreignKeys && missing.length === 0 && unexpected.length === 0,
     checks: {
       integrity,
       foreignKeys,

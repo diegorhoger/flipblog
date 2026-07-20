@@ -63,26 +63,18 @@ export function getDb() {
   }
   db.exec('PRAGMA foreign_keys = ON;');
 
-  db.exec(BASELINE_POSTS);
-  // Only seed the legacy `admin` table when `users` does not yet exist. After
-  // migration 004 has renamed it, `users` is the canonical accounts table and
-  // we must not recreate `admin` on a subsequent startup.
-  const hasUsers = !!db
-    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
-    .get();
-  if (!hasUsers) {
-    db.exec(BASELINE_ADMIN);
-  }
-
-  // Snapshot the live database only when an upgrade is actually about to happen.
-  // The baseline schema is already in place (a no-op on an existing database),
-  // so the backup is a coherent, openable pre-upgrade snapshot. Transactional
+  // Determine pending migrations WITHOUT writing to the database, then snapshot
+  // the live file *before* any baseline or migration writes. The backup is taken
+  // at this point so it captures the on-disk state exactly as the process found
+  // it — baseline tables, the legacy `admin` rename, and `schema_migrations`
+  // creation all happen afterwards. On a fresh database the snapshot is empty;
+  // on an existing one it is a faithful pre-upgrade copy. Transactional
   // migrations protect against SQL failure, but not against filesystem
   // corruption, operator mistakes, or deploying against the wrong file — the
   // backup is the safety net for those, so a failed upgrade can always be rolled
-  // back. An ordinary restart with no pending migrations backs up nothing:
-  // minting a copy of an unchanged database on every reboot is not resilience.
-  // Skipped entirely for in-memory / test runs.
+  // back. A backup is taken only when an upgrade is actually pending: an ordinary
+  // restart with nothing to migrate backs up nothing (minting five copies of an
+  // unchanged database is not resilience). Skipped for in-memory / test runs.
   const pending = getPendingMigrations(db);
   if (config.dbBackupEnabled && !isMemoryDb && pending.length > 0) {
     const preVersion = getCurrentSchemaVersion(db);
@@ -93,6 +85,17 @@ export function getDb() {
       version: preVersion,
       retention: config.dbBackupRetention,
     });
+  }
+
+  db.exec(BASELINE_POSTS);
+  // Only seed the legacy `admin` table when `users` does not yet exist. After
+  // migration 004 has renamed it, `users` is the canonical accounts table and
+  // we must not recreate `admin` on a subsequent startup.
+  const hasUsers = !!db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+    .get();
+  if (!hasUsers) {
+    db.exec(BASELINE_ADMIN);
   }
 
   runMigrations(db);

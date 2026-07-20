@@ -203,25 +203,33 @@ database.
 ### Startup sequence
 
 1. The server opens `DB_PATH` (creating it and its parent directory if missing).
-2. **Before any migration**, it snapshots the live database into a sibling `backups/` directory
-   (see below) — this is your rollback point if the upgrade fails.
-3. The baseline schema and ordered, versioned migrations run inside a single transaction.
-4. A health check runs: `PRAGMA integrity_check`, `PRAGMA foreign_key_check`, and a verification
-   that every expected migration version is recorded. **If any check fails the process exits
-   non-zero** — it will not serve requests on a database it cannot trust.
+2. It determines pending migrations **without writing to the database** (no `schema_migrations`
+   row, no baseline tables are created yet).
+3. **Only if an upgrade is pending**, it snapshots the live database — exactly as it exists on disk
+   *before* any startup write — into a sibling `backups/` directory (see below). This is your rollback
+   point if the upgrade fails. An ordinary restart with nothing to migrate backs up nothing.
+4. The baseline schema and ordered, versioned migrations run inside a single transaction.
+5. A health check runs: `PRAGMA integrity_check`, `PRAGMA foreign_key_check`, a verification that
+   every expected migration version is recorded, **and** that no unrecognised (future) migration
+   version is present. **If any check fails the process exits non-zero** — it will not serve requests
+   on a database it cannot trust. (An unrecognised version means a newer build migrated this
+   database; an older build must not start against it.)
 
 No backups or health-gated startup run for `:memory:` databases or when `NODE_ENV=test`.
 
 ### Database backups
 
 Whenever the server starts and **pending migrations are about to run**, it automatically snapshots
-the file database via SQLite's online `VACUUM INTO`, so a failed deploy never overwrites your only
-good copy. An ordinary restart with nothing to migrate backs up nothing — five identical copies of an
-unchanged database is not resilience. Backups are written to `<dir of DB_PATH>/backups/` by default and
-named `flipblog-pre-v<version>-<timestamp>.db`, where `<version>` is the schema version *before* the
-pending migrations run (e.g. `flipblog-pre-v6-20260720T153001Z.db`). The embedded timestamp makes the
-filenames sort chronologically, and only the newest `DB_BACKUP_RETENTION` (default `5`) are kept;
-older snapshots are pruned automatically.
+the database exactly as it was found on disk — *before* the baseline schema, the legacy
+`admin`→`users` rename, and `schema_migrations` bookkeeping are written — via SQLite's online
+`VACUUM INTO`. A failed deploy therefore never overwrites your only good copy. On a fresh database
+the snapshot is empty; on an existing one it is a faithful pre-upgrade copy. An ordinary restart with
+nothing to migrate backs up nothing — five identical copies of an unchanged database is not resilience.
+Backups are written to `<dir of DB_PATH>/backups/` by default and named
+`flipblog-pre-v<version>-<timestamp>.db`, where `<version>` is the schema version *before* the
+pending migrations run (e.g. `flipblog-pre-v6-20260720T153001.123Z.db`). The embedded millisecond-
+precision timestamp makes the filenames sort chronologically, and retention keeps the newest
+`DB_BACKUP_RETENTION` (default `5`) by actual time — across mixed schema versions — pruning the rest.
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
@@ -243,7 +251,7 @@ older snapshots are pruned automatically.
 3. Replace it with the chosen backup (pick the highest `flipblog-pre-v<N>-…` whose version matches
    the code you are about to run):
    ```bash
-   cp data/backups/flipblog-pre-v6-20260720T153001Z.db data/flipblog.db
+   cp data/backups/flipblog-pre-v6-20260720T153001.123Z.db data/flipblog.db
    ```
 4. **Verify** the restored file before trusting it:
    ```bash
@@ -256,8 +264,10 @@ older snapshots are pruned automatically.
 
 ### Rollback procedure
 
-- If a new deployment's migrations fail, the process refuses to start (fail-closed) and your original
-  database file is untouched — restore the matching pre-upgrade backup and redeploy the previous build.
+- If a new deployment's migrations fail, the process refuses to start (fail-closed). The migration ran
+  inside a single transaction and is rolled back, leaving the database as it was before this startup's
+  writes; the pre-upgrade backup taken at step 3 is also available if you prefer an explicit known-good
+  copy. Restore the backup and redeploy the previous build.
 - Keep the previous server build/container image available so you can redeploy it against the restored
   database.
 
