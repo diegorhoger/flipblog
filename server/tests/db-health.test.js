@@ -112,15 +112,16 @@ test('pruneBackups keeps only the newest retention count', () => {
   const dir = newDir('fb-prune-');
   const bdir = join(dir, 'backups');
   mkdirSync(bdir, { recursive: true });
-  // Seven backups with sortable, increasing millisecond-precision timestamps.
+  // Seven backups with sortable, increasing millisecond-precision timestamps
+  // and a (required) per-backup attempt-id suffix.
   for (let i = 0; i < 7; i++) {
-    writeFileSync(join(bdir, backupFileName(6, `2026010${i}T00000${i}.000Z`)), '');
+    writeFileSync(join(bdir, `flipblog-pre-v6-2026010${i}T00000${i}.000Z-${i}.db`), '');
   }
   const { retained, pruned } = pruneBackups(bdir, 5);
   assert.equal(pruned.length, 2, 'two oldest removed');
   assert.equal(retained.length, 5, 'five newest kept');
   // Newest (i=6) survives.
-  assert.ok(retained.includes(backupFileName(6, `20260106T000006.000Z`)));
+  assert.ok(retained.some((n) => n.startsWith('flipblog-pre-v6-20260106T000006.000Z')), 'newest retained');
   cleanup(dir);
 });
 
@@ -131,22 +132,22 @@ test('pruneBackups keeps the chronologically newest across mixed schema versions
   // Deliberately out of order: v10 is OLDER than v9, and v6 is the newest by
   // time. A version-only sort would wrongly prefer v10; timestamp sort must win.
   const files = [
-    'flipblog-pre-v10-20260101T000000.000Z.db', // oldest
-    'flipblog-pre-v9-20260720T000000.000Z.db', // newer
-    'flipblog-pre-v6-20260801T000000.000Z.db', // newest
-    'flipblog-pre-v10-20260201T000000.000Z.db', // older
-    'flipblog-pre-v9-20260301T000000.000Z.db', // mid
-    'flipblog-pre-v6-20260401T000000.000Z.db', // mid
-    'flipblog-pre-v10-20260501T000000.000Z.db', // mid
+    'flipblog-pre-v10-20260101T000000.000Z-1.db', // oldest
+    'flipblog-pre-v9-20260720T000000.000Z-2.db', // newer
+    'flipblog-pre-v6-20260801T000000.000Z-3.db', // newest
+    'flipblog-pre-v10-20260201T000000.000Z-4.db', // older
+    'flipblog-pre-v9-20260301T000000.000Z-5.db', // mid
+    'flipblog-pre-v6-20260401T000000.000Z-6.db', // mid
+    'flipblog-pre-v10-20260501T000000.000Z-7.db', // mid
   ];
   for (const f of files) writeFileSync(join(bdir, f), '');
   const { retained, pruned } = pruneBackups(bdir, 5);
   assert.equal(pruned.length, 2, 'two oldest removed');
   assert.equal(retained.length, 5);
   // Newest by timestamp (v6 @ 2026-08-01) survives despite being the lowest version.
-  assert.ok(retained.includes('flipblog-pre-v6-20260801T000000.000Z.db'));
+  assert.ok(retained.some((n) => n.startsWith('flipblog-pre-v6-20260801T000000.000Z')));
   // Oldest (v10 @ 2026-01-01) is pruned regardless of its higher version.
-  assert.ok(!retained.includes('flipblog-pre-v10-20260101T000000.000Z.db'));
+  assert.ok(!retained.some((n) => n.startsWith('flipblog-pre-v10-20260101T000000.000Z')));
   cleanup(dir);
 });
 
@@ -171,6 +172,29 @@ test('backupDatabase gives same-second attempts distinct, restorable names', () 
   cleanup(dir);
 });
 
+test('identical timestamp + version never collide when attempt ids are injected', () => {
+  // Simulates two containers that are BOTH PID 1 on the same mounted volume at
+  // the same millisecond: uniqueness must come from the attempt id, not the PID.
+  const dir = newDir('fb-attempt-');
+  const file = join(dir, 'app.db');
+  const db = makeOnDiskDb(file);
+  const bdir = join(dir, 'backups');
+  mkdirSync(bdir, { recursive: true });
+  const ts = '20260720T153001.000Z';
+  const a = backupDatabase(db, { dbPath: file, backupDir: bdir, version: 6, retention: 5, ts, attemptId: 'container-a' });
+  const b = backupDatabase(db, { dbPath: file, backupDir: bdir, version: 6, retention: 5, ts, attemptId: 'container-b' });
+  assert.notEqual(a.name, b.name, 'distinct injected attempt ids yield distinct names');
+  assert.ok(a.name.endsWith('-container-a.db'));
+  assert.ok(b.name.endsWith('-container-b.db'));
+  for (const r of [a, b]) {
+    const copy = new DatabaseSync(r.backupPath);
+    assert.equal(copy.prepare('SELECT v FROM t WHERE id = 1').get().v, 'hello');
+    copy.close();
+  }
+  db.close();
+  cleanup(dir);
+});
+
 test('backupDatabase prunes old snapshots down to retention', () => {
   const dir = newDir('fb-bak-prune-');
   const file = join(dir, 'app.db');
@@ -180,7 +204,7 @@ test('backupDatabase prunes old snapshots down to retention', () => {
 
   // Seed three old backups so the retention logic has something to trim.
   for (let i = 0; i < 3; i++) {
-    writeFileSync(join(bdir, backupFileName(6, `2025010${i}T00000${i}.000Z`)), '');
+    writeFileSync(join(bdir, `flipblog-pre-v6-2025010${i}T00000${i}.000Z-${i}.db`), '');
   }
   const result = backupDatabase(db, { dbPath: file, backupDir: bdir, version: 6, retention: 5 });
   assert.ok(result);
