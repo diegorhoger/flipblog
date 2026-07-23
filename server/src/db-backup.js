@@ -14,12 +14,12 @@ import { logger } from './logging.js';
 // sorts chronologically as text. Retention sorts by the *parsed timestamp*,
 // never by the full filename (whose leading version would otherwise misorder
 // v9 vs v10). To make concurrent backups race-safe across hosts and containers,
-// every attempt appends a globally unique attempt identifier (a UUID); because
-// the identifier is drawn from cryptographically secure randomness, two
-// simultaneous startups — even in separate containers that both run as PID 1 on
-// the same mounted volume at the same millisecond — can never choose the same
-// final name or share a temp file. There is no time-of-check/time-of-use race
-// to reserve, and no backup overwrites another.
+// every attempt appends a collision-resistant attempt identifier (a UUID);
+// because the identifier is drawn from cryptographically secure randomness,
+// two simultaneous startups — even in separate containers that both run as PID
+// 1 on the same mounted volume at the same millisecond — have negligible
+// collision probability. There is no time-of-check/time-of-use race to reserve,
+// and no backup overwrites another.
 
 const BACKUP_PREFIX = 'flipblog-pre-v';
 const BACKUP_SUFFIX = '.db';
@@ -27,7 +27,7 @@ const BACKUP_SUFFIX = '.db';
 // flipblog-pre-v<version>-<YYYYMMDDThhmmss.SSSZ>-<attemptId>.db
 const NAME_RE = /^flipblog-pre-v(\d+)-(\d{8}T\d{6}\.\d{3}Z)-([A-Za-z0-9-]+)\.db$/;
 
-// Globally collision-resistant per-attempt identifier. Injectable for tests so
+// Collision-resistant per-attempt identifier. Injectable for tests so
 // they can simulate two processes sharing a timestamp/version/PID context.
 function defaultAttemptId() {
   return randomUUID();
@@ -45,10 +45,13 @@ export function timestampToken(d = new Date()) {
   return d.toISOString().replace(/[-:]/g, '');
 }
 
-// Base backup name WITHOUT the uniqueness suffix (used by tests and for the
-// canonical `flipblog-pre-v<version>-<ts>.db` form).
-export function backupFileName(version, ts = timestampToken()) {
-  return `${BACKUP_PREFIX}${version}-${ts}${BACKUP_SUFFIX}`;
+// Canonical backup name: `flipblog-pre-v<version>-<ts>-<attemptId>.db`.
+// The attempt identifier makes concurrent startups in separate containers
+// collision-safe without any filesystem reservation dance.
+// `version` is the schema version *before* the pending migrations run.
+// `attemptId` defaults to a UUID (collision-resistant, injectable for tests).
+export function backupFileName(version, ts = timestampToken(), attemptId = defaultAttemptId()) {
+  return `${BACKUP_PREFIX}${version}-${ts}-${attemptId}${BACKUP_SUFFIX}`;
 }
 
 // Parses a backup filename into its parts. Returns `null` for non-backup names.
@@ -78,10 +81,10 @@ export function defaultBackupDir(dbPath) {
 // proceeding with no safety net. `ts` and `attemptId` are injectable for
 // deterministic tests.
 //
-// The final name and the temp file both carry the same globally-unique attempt
-// identifier, so two concurrent backup attempts (even in different containers
-// that are both PID 1 on the same mounted volume at the same millisecond) can
-// never collide on the destination or share a temp file — no `existsSync`-then-
+// The final name and the temp file both carry the same collision-resistant
+// attempt identifier, so two concurrent backup attempts (even in different
+// containers that are both PID 1 on the same mounted volume at the same
+// millisecond) have negligible collision probability — no `existsSync`-then-
 // `rename` reservation race exists.
 export function backupDatabase(
   db,
@@ -92,7 +95,7 @@ export function backupDatabase(
   mkdirSync(backupDir, { recursive: true });
   const stamp = ts || timestampToken();
   const attempt = attemptId || defaultAttemptId();
-  const finalName = `${BACKUP_PREFIX}${version}-${stamp}-${attempt}${BACKUP_SUFFIX}`;
+  const finalName = backupFileName(version, stamp, attempt);
   const finalPath = join(backupDir, finalName);
   const tmpPath = join(backupDir, `.${finalName}.tmp`);
 

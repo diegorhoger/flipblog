@@ -229,10 +229,14 @@ the database exactly as it was found on disk — *before* the baseline schema, t
 the snapshot is empty; on an existing one it is a faithful pre-upgrade copy. An ordinary restart with
 nothing to migrate backs up nothing — five identical copies of an unchanged database is not resilience.
 Backups are written to `<dir of DB_PATH>/backups/` by default and named
-`flipblog-pre-v<version>-<timestamp>.db`, where `<version>` is the schema version *before* the
-pending migrations run (e.g. `flipblog-pre-v6-20260720T153001.123Z.db`). The embedded millisecond-
-precision timestamp makes the filenames sort chronologically, and retention keeps the newest
-`DB_BACKUP_RETENTION` (default `5`) by actual time — across mixed schema versions — pruning the rest.
+`flipblog-pre-v<version>-<timestamp>-<attempt-id>.db`, where `<version>` is the schema version
+*before* the pending migrations run, `<timestamp>` is a millisecond-precision ISO-ish token (e.g.
+`20260720T153001.123Z`), and `<attempt-id>` is a collision-resistant UUID that makes concurrent
+startups in separate containers race-safe (e.g.
+`flipblog-pre-v6-20260720T153001.123Z-550e8400-e29b-41d4-a716-446655440000.db`). The embedded
+millisecond-precision timestamp makes the filenames sort chronologically, and retention keeps the
+newest `DB_BACKUP_RETENTION` (default `5`) by actual time — across mixed schema versions — pruning
+the rest.
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
@@ -254,7 +258,7 @@ precision timestamp makes the filenames sort chronologically, and retention keep
 3. Replace it with the chosen backup (pick the highest `flipblog-pre-v<N>-…` whose version matches
    the code you are about to run):
    ```bash
-   cp data/backups/flipblog-pre-v6-20260720T153001.123Z.db data/flipblog.db
+   cp data/backups/flipblog-pre-v6-20260720T153001.123Z-550e8400-e29b-41d4-a716-446655440000.db data/flipblog.db
    ```
 4. **Verify** the restored file before trusting it:
    ```bash
