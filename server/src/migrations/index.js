@@ -31,6 +31,47 @@ function appliedVersions(db) {
   return new Set(db.prepare('SELECT version FROM schema_migrations').all().map((r) => r.version));
 }
 
+// Returns the migrations not yet recorded as applied. Used by the startup path
+// to decide whether an upgrade (and therefore a pre-migration backup) is
+// actually happening — an ordinary restart with nothing pending must not create
+// a backup, or every reboot would mint five identical copies and call it
+// resilience. This is READ-ONLY: it never creates `schema_migrations`, so the
+// caller can determine pending state before taking the backup (the backup must
+// predate every startup schema write). Exported so callers can probe without
+// running or mutating migrations.
+export function getPendingMigrations(db, migrations = MIGRATIONS) {
+  const has = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_migrations'")
+    .get();
+  if (!has) return [...migrations];
+  const applied = appliedVersions(db);
+  return migrations.filter((m) => !applied.has(m.version));
+}
+
+// READ-ONLY inspection of the migration ledger. Never creates `schema_migrations`
+// or writes anything else, so startup can reject an unknown future schema BEFORE
+// making any change to the database. `unexpected` holds applied versions this
+// build does not recognise (i.e. a newer build migrated this database); an older
+// build must refuse to start against it rather than mutate a schema it cannot
+// understand. `missing` holds expected versions not yet applied.
+export function inspectMigrationState(db, migrations = MIGRATIONS) {
+  const hasMigrationTable = !!db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_migrations'")
+    .get();
+  const appliedSet = hasMigrationTable
+    ? new Set(db.prepare('SELECT version FROM schema_migrations').all().map((r) => r.version))
+    : new Set();
+  const registryVersions = new Set(migrations.map((m) => m.version));
+  const missing = migrations.filter((m) => !appliedSet.has(m.version)).map((m) => m.version);
+  const unexpected = [...appliedSet].filter((v) => !registryVersions.has(v)).sort((a, b) => a - b);
+  return {
+    hasMigrationTable,
+    applied: [...appliedSet].sort((a, b) => a - b),
+    missing,
+    unexpected,
+  };
+}
+
 function validateUniqueVersions(migrations) {
   const seen = new Set();
   for (const m of migrations) {
