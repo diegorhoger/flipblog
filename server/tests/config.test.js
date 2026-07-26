@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, sep, isAbsolute } from 'node:path';
 import { resolveConfig } from '../src/config.js';
@@ -7,7 +8,7 @@ import { resolveConfig } from '../src/config.js';
 const testDir = dirname(fileURLToPath(import.meta.url));
 const serverDir = resolve(testDir, '..');
 const repoRoot = resolve(serverDir, '..');
-const tmpDir = sep === '\\' ? 'C:\\' : '/tmp';
+const externalDir = tmpdir();
 
 test('storage paths are independent of the launch working directory', () => {
   const env = { UPLOADS_DIR: 'uploads', DB_PATH: 'data/app.db' };
@@ -41,7 +42,7 @@ test('absolute env paths are used as-is regardless of cwd', () => {
   const original = process.cwd();
   let resolved;
   try {
-    process.chdir(tmpDir);
+    process.chdir(externalDir);
     resolved = resolveConfig(env);
   } finally {
     process.chdir(original);
