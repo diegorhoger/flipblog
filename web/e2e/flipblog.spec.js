@@ -9,11 +9,13 @@ test('home lists seeded flipbooks', async ({ page }) => {
 
 test('reader opens a flippable book', async ({ page }) => {
   await page.goto('/#/read/copa-do-mundo-fifa-2026');
-  await expect(page.getByRole('heading', { name: 'A Copa do Mundo FIFA 2026' })).toBeVisible();
-  await page.waitForSelector('.flipbook', { timeout: 10000 });
-  await page.waitForTimeout(800);
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'A Copa do Mundo FIFA 2026', exact: true })
+  ).toBeVisible();
+  // Wait for the flipbook library to initialise (page-indicator is set by the
+  // 'loaded' event, so its presence confirms initialisation is complete).
+  await expect(page.locator('.page-indicator')).toContainText('/', { timeout: 10000 });
   await expect(page.locator('.fb-page')).toHaveCount(2);
-  await expect(page.locator('.page-indicator')).toContainText('/');
 });
 
 test('admin can log in and publish a flipbook', async ({ page }) => {
