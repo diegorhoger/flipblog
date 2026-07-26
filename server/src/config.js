@@ -47,10 +47,12 @@ function resolvePath(value, fallback) {
   return isAbsolute(value) ? value : resolve(serverRoot, value);
 }
 
-function validatePositiveInt(val, fallback) {
+function validatePositiveInt(name, val, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
   if (val === undefined || val === null || val === '') return fallback;
   const n = Number(val);
-  if (!Number.isInteger(n) || n < 1) return fallback;
+  if (!Number.isInteger(n) || n < min || n > max) {
+    throw new Error(`Invalid ${name}: expected an integer between ${min} and ${max}, got "${val}"`);
+  }
   return n;
 }
 
@@ -90,8 +92,9 @@ export function resolveConfig(env = process.env) {
     dbBackupEnabled,
     dbBackupDir,
     dbBackupRetention,
-    authRateLimitMaxFailures: validatePositiveInt(env.AUTH_RATE_LIMIT_MAX_FAILURES, 5),
-    authRateLimitWindowMs: validatePositiveInt(env.AUTH_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
+    authRateLimitMaxFailures: validatePositiveInt('AUTH_RATE_LIMIT_MAX_FAILURES', env.AUTH_RATE_LIMIT_MAX_FAILURES, 5, { min: 1, max: 100 }),
+    authRateLimitWindowMs: validatePositiveInt('AUTH_RATE_LIMIT_WINDOW_MS', env.AUTH_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000, { min: 1000, max: 86_400_000 }),
+    authRateLimitMaxEntries: validatePositiveInt('AUTH_RATE_LIMIT_MAX_ENTRIES', env.AUTH_RATE_LIMIT_MAX_ENTRIES, 10000, { min: 100, max: 100_000 }),
   };
 }
 
