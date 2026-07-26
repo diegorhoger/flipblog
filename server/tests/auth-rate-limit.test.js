@@ -4,7 +4,7 @@ import express from 'express';
 import request from 'supertest';
 import { app, ADMIN } from './helpers.js';
 import { createLoginRateLimiter, loginLimiter, changePasswordLimiter } from '../src/security/authRateLimiter.js';
-import { authRateLimiter } from '../src/routes/auth.js';
+import { authRateLimiter, createAuthRateLimiterFromConfig } from '../src/routes/auth.js';
 import { seedUserIfMissing, createUser } from '../src/services/users.js';
 
 afterEach(() => {
@@ -620,6 +620,17 @@ describe('config validation', () => {
     assert.equal(cfg.authRateLimitMaxFailures, 5);
     assert.equal(cfg.authRateLimitWindowMs, 15 * 60 * 1000);
     assert.equal(cfg.authRateLimitMaxEntries, 10000);
+  });
+
+  test('createAuthRateLimiterFromConfig passes maxEntries to createLoginRateLimiter', () => {
+    const rl = createAuthRateLimiterFromConfig({
+      authRateLimitMaxFailures: 3,
+      authRateLimitWindowMs: 5000,
+      authRateLimitMaxEntries: 50,
+    });
+    assert.equal(rl.maxEntries, 50);
+    assert.equal(rl.maxFailures, 3);
+    rl.destroy();
   });
 });
 

@@ -23,10 +23,15 @@ import { logger } from '../logging.js';
 
 const router = Router();
 
-export const authRateLimiter = createLoginRateLimiter({
-  maxFailures: config.authRateLimitMaxFailures,
-  windowMs: config.authRateLimitWindowMs,
-});
+export function createAuthRateLimiterFromConfig(cfg) {
+  return createLoginRateLimiter({
+    maxFailures: cfg.authRateLimitMaxFailures,
+    windowMs: cfg.authRateLimitWindowMs,
+    maxEntries: cfg.authRateLimitMaxEntries,
+  });
+}
+
+export const authRateLimiter = createAuthRateLimiterFromConfig(config);
 
 function setSessionCookie(res, user) {
   const token = signJwt(
