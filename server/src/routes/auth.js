@@ -14,8 +14,19 @@ import {
   updatePassword,
   setAvatar,
 } from '../services/users.js';
+import {
+  createLoginRateLimiter,
+  loginLimiter as loginRateLimit,
+  changePasswordLimiter as changePasswordRateLimit,
+} from '../security/authRateLimiter.js';
+import { logger } from '../logging.js';
 
 const router = Router();
+
+export const authRateLimiter = createLoginRateLimiter({
+  maxFailures: config.authRateLimitMaxFailures,
+  windowMs: config.authRateLimitWindowMs,
+});
 
 function setSessionCookie(res, user) {
   const token = signJwt(
@@ -32,7 +43,7 @@ function setSessionCookie(res, user) {
   });
 }
 
-router.post('/login', validateBody(loginSchema), async (req, res, next) => {
+router.post('/login', validateBody(loginSchema), loginRateLimit(authRateLimiter, { log: logger }), async (req, res, next) => {
   try {
     const { username, password } = req.valid;
     const user = await authenticate(username, password);
@@ -126,6 +137,7 @@ router.post(
   '/change-password',
   requireAuth,
   validateBody(changePasswordSchema),
+  changePasswordRateLimit(authRateLimiter, { log: logger }),
   async (req, res, next) => {
     try {
       const { currentPassword, newPassword } = req.valid;

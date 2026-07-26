@@ -47,6 +47,13 @@ function resolvePath(value, fallback) {
   return isAbsolute(value) ? value : resolve(serverRoot, value);
 }
 
+function validatePositiveInt(val, fallback) {
+  if (val === undefined || val === null || val === '') return fallback;
+  const n = Number(val);
+  if (!Number.isInteger(n) || n < 1) return fallback;
+  return n;
+}
+
 // Pure resolver: given an environment object, compute the application config.
 // Exported so tests can verify cwd-independent path resolution without relying
 // on module-level process.env mutation. Paths are always absolute (except the
@@ -83,6 +90,8 @@ export function resolveConfig(env = process.env) {
     dbBackupEnabled,
     dbBackupDir,
     dbBackupRetention,
+    authRateLimitMaxFailures: validatePositiveInt(env.AUTH_RATE_LIMIT_MAX_FAILURES, 5),
+    authRateLimitWindowMs: validatePositiveInt(env.AUTH_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
   };
 }
 
