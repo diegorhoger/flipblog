@@ -193,6 +193,15 @@ It always returns at least one page. The split is pure and unit-tested (`server/
 - Uploads are restricted to images and a configurable size limit (`MAX_UPLOAD_BYTES`, default 5 MB).
 - Dev-only dependencies (Vite/esbuild toolchain) carry advisories typical of the build toolchain and are **not** shipped
   in the production bundle; the runtime browser dependency `quill` is pinned to the patched `2.0.2`.
+- **Authentication rate limiting** — login and change-password endpoints are rate-limited per IP address and per user
+  (after `AUTH_RATE_LIMIT_MAX_FAILURES` credential failures within `AUTH_RATE_LIMIT_WINDOW_MS`). Once the limit is hit,
+  the endpoint returns `429` with a `Retry-After` header before any password verification, preventing unlimited
+  brute-force work. A correct password entered during an active block is also refused until the window expires. Only
+  confirmed credential failures consume quota; server errors and other responses do not. Successful authentication
+  clears the per-user bucket but leaves the IP-wide bucket intact so that distributed attacks are still detected. The
+  limiter is in-process (single-Node, fixed-window) with a bounded store (configurable via
+  `AUTH_RATE_LIMIT_MAX_ENTRIES`) and is not shared across processes; configure `trust proxy` in the reverse proxy
+  layer if the server runs behind a load balancer.
 
 ## Deployment
 
