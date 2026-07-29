@@ -52,21 +52,37 @@ function resolvePath(value, fallback) {
 // on module-level process.env mutation. Paths are always absolute (except the
 // special ':memory:' database).
 export function resolveConfig(env = process.env) {
+  const dbPath = (env.DB_PATH?.trim() === ':memory:')
+    ? ':memory:'
+    : resolvePath(env.DB_PATH, join(serverRoot, 'data', 'flipblog.db'));
+  const isMemory = dbPath === ':memory:';
+  const testMode = env.NODE_ENV === 'test';
+  // A real file database has exactly one usable copy. We never run startup
+  // backups for in-memory databases (nothing to lose, and VACUUM INTO is a
+  // no-op) or under test runs (which spin up many throwaway on-disk files).
+  const dbBackupEnabled = !isMemory && !testMode && env.DB_BACKUP_ENABLED !== 'false';
+  // Backups live in a sibling `backups/` directory by default so they sit next
+  // to — but never inside — the live database file.
+  const realDbPath = isMemory ? join(serverRoot, 'data', 'flipblog.db') : dbPath;
+  const dbBackupDir = resolvePath(env.DB_BACKUP_DIR?.trim(), join(dirname(realDbPath), 'backups'));
+  const dbBackupRetention = Number(env.DB_BACKUP_RETENTION) > 0 ? Number(env.DB_BACKUP_RETENTION) : 5;
+
   return {
     port: Number(env.PORT) || 3000,
     host: env.HOST || '0.0.0.0',
     appSecret: env.APP_SECRET || 'dev-insecure-secret-change-me',
     adminUser: env.ADMIN_USER || 'admin',
     adminPassword: env.ADMIN_PASSWORD || 'changeme',
-    dbPath: (env.DB_PATH?.trim() === ':memory:')
-      ? ':memory:'
-      : resolvePath(env.DB_PATH, join(serverRoot, 'data', 'flipblog.db')),
+    dbPath,
     publicDir: resolvePath(env.PUBLIC_DIR?.trim(), join(serverRoot, 'public')),
     uploadsDir: resolvePath(env.UPLOADS_DIR?.trim(), join(serverRoot, 'public', 'uploads')),
     uploadsUrl: env.UPLOADS_URL || '/uploads',
     maxUploadBytes: 5 * 1024 * 1024,
     cookieName: 'fb_session',
     jwtTtlSeconds: 60 * 60 * 24 * 7,
+    dbBackupEnabled,
+    dbBackupDir,
+    dbBackupRetention,
   };
 }
 
