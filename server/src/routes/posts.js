@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requireAuth, optionalAuth } from '../middleware/requireAuth.js';
+import { requireAuth, optionalAuth, requireAnyRole } from '../middleware/requireAuth.js';
 import { validateBody, postSchema } from '../middleware/validate.js';
 import { listPosts, getPostBySlug, getPostById, createPost, updatePost, deletePost } from '../services/posts.js';
 
@@ -40,7 +40,7 @@ router.get('/:slug', optionalAuth, (req, res) => {
   res.json(post);
 });
 
-router.post('/', requireAuth, validateBody(postSchema), (req, res, next) => {
+router.post('/', requireAuth, requireAnyRole('admin', 'author'), validateBody(postSchema), (req, res, next) => {
   try {
     const post = createPost(req.valid, req.user);
     res.status(201).json(post);
@@ -49,7 +49,7 @@ router.post('/', requireAuth, validateBody(postSchema), (req, res, next) => {
   }
 });
 
-router.put('/:id', requireAuth, validateBody(postSchema), (req, res, next) => {
+router.put('/:id', requireAuth, requireAnyRole('admin', 'author'), validateBody(postSchema), (req, res, next) => {
   try {
     const post = updatePost(req.params.id, req.valid, req.user);
     if (!post) return res.status(404).json({ error: 'not_found' });
@@ -59,7 +59,7 @@ router.put('/:id', requireAuth, validateBody(postSchema), (req, res, next) => {
   }
 });
 
-router.delete('/:id', requireAuth, (req, res, next) => {
+router.delete('/:id', requireAuth, requireAnyRole('admin', 'author'), (req, res, next) => {
   try {
     const ok = deletePost(req.params.id, req.user);
     if (!ok) return res.status(404).json({ error: 'not_found' });

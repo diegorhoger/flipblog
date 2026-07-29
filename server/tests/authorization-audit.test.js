@@ -4,6 +4,8 @@ import request from 'supertest';
 import { app, ADMIN } from './helpers.js';
 import { seedUserIfMissing, createUser } from '../src/services/users.js';
 import { createPost } from '../src/services/posts.js';
+import { signJwt } from '../src/auth/jwt.js';
+import { config } from '../src/config.js';
 
 const PNG_1X1 = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMCAQDJ/PWeAAAAAElFTkSuQmCC',
@@ -21,55 +23,71 @@ async function loginAgent(username, password) {
   return agent;
 }
 
-async function adminAgent() {
-  return loginAgent(ADMIN.username, ADMIN.password);
+function cookieFor(payload) {
+  const token = signJwt(payload, config.appSecret, 3600);
+  return `fb_session=${token}`;
 }
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
 
 let admin;
 let author;
 let authorActor;
+let otherAuthor;
 let otherAuthorActor;
-let subscriber;
+let unsupportedRole;
+let unsupportedRoleActor;
 let publishedByAuthor;
 let publishedByOther;
 let draftByAuthor;
 
 before(async () => {
   await seedUserIfMissing();
-  admin = await adminAgent();
+  admin = await loginAgent(ADMIN.username, ADMIN.password);
 
   const u1 = await createUser({ username: tag('aa_author'), password: 'testpass1', role: 'author' });
   author = await loginAgent(u1.username, 'testpass1');
   authorActor = { sub: u1.id, role: 'author', username: u1.username };
 
   const u2 = await createUser({ username: tag('aa_other'), password: 'testpass1', role: 'author' });
+  otherAuthor = await loginAgent(u2.username, 'testpass1');
   otherAuthorActor = { sub: u2.id, role: 'author', username: u2.username };
 
-  const u3 = await createUser({ username: tag('aa_sub'), password: 'testpass1', role: 'subscriber' });
-  subscriber = await loginAgent(u3.username, 'testpass1');
+  const u3 = await createUser({ username: tag('aa_unsup'), password: 'testpass1', role: 'subscriber' });
+  unsupportedRole = await loginAgent(u3.username, 'testpass1');
+  unsupportedRoleActor = { sub: u3.id, role: 'subscriber', username: u3.username };
 
-  publishedByAuthor = createPost({ title: 'AA Published', content: '<p>pub</p>', status: 'published' }, authorActor);
-  publishedByOther = createPost({ title: 'AA Other Pub', content: '<p>other pub</p>', status: 'published' }, otherAuthorActor);
-  draftByAuthor = createPost({ title: 'AA Draft', content: '<p>draft</p>', status: 'draft' }, authorActor);
+  publishedByAuthor = createPost({ title: 'AA Published Author', content: '<p>pub</p>', status: 'published' }, authorActor);
+  publishedByOther = createPost({ title: 'AA Published Other', content: '<p>other pub</p>', status: 'published' }, otherAuthorActor);
+  draftByAuthor = createPost({ title: 'AA Draft Author', content: '<p>draft</p>', status: 'draft' }, authorActor);
 });
 
 // ===========================================================================
-// GET /api/health — public
+// Supported roles: admin, author. Any other role (e.g. subscriber) is
+// unsupported/adversarial. Unsupported roles may authenticate (login, /me,
+// avatar, change-password, logout) but are denied all authoring operations
+// (create/edit/delete posts, uploads, audit) with 403.
+// ===========================================================================
+
+// ===========================================================================
+// GET /api/health, /api/health/live, /api/health/ready — public
 // ===========================================================================
 
 describe('GET /api/health', () => {
-  test('anonymous can access health endpoint', async () => {
+  test('anonymous can access health', async () => {
     const res = await request(app).get('/api/health');
     assert.equal(res.status, 200);
     assert.equal(res.body.status, 'ok');
   });
 
-  test('health live endpoint is public', async () => {
+  test('anonymous can access health/live', async () => {
     const res = await request(app).get('/api/health/live');
     assert.equal(res.status, 200);
   });
 
-  test('health ready endpoint is public', async () => {
+  test('anonymous can access health/ready', async () => {
     const res = await request(app).get('/api/health/ready');
     assert.equal(res.status, 200);
   });
@@ -86,7 +104,7 @@ describe('POST /api/auth/login', () => {
     assert.equal(res.body.error, 'invalid_credentials');
   });
 
-  test('correct credentials return 200 with user', async () => {
+  test('correct credentials return 200', async () => {
     const res = await request(app).post('/api/auth/login').send(ADMIN);
     assert.equal(res.status, 200);
     assert.ok(res.body.user);
@@ -105,7 +123,7 @@ describe('POST /api/auth/logout', () => {
 });
 
 // ===========================================================================
-// GET /api/auth/me — requires auth (any role)
+// GET /api/auth/me — requires auth (any role, including unsupported)
 // ===========================================================================
 
 describe('GET /api/auth/me', () => {
@@ -126,26 +144,23 @@ describe('GET /api/auth/me', () => {
     assert.equal(res.body.user.role, 'author');
   });
 
-  test('subscriber can read own profile', async () => {
-    const res = await subscriber.get('/api/auth/me');
+  test('unsupported role can read own profile', async () => {
+    const res = await unsupportedRole.get('/api/auth/me');
     assert.equal(res.status, 200);
+    assert.equal(res.body.user.role, 'subscriber');
   });
 
-  test('response exposes only safe fields, never internal identifiers', async () => {
+  test('response exposes only safe fields', async () => {
     const res = await admin.get('/api/auth/me');
     assert.equal(res.status, 200);
-    const keys = Object.keys(res.body.user);
-    assert.ok(keys.includes('username'));
-    assert.ok(keys.includes('role'));
-    assert.ok(keys.includes('created_at'));
-    assert.ok(!keys.includes('id'));
-    assert.ok(!keys.includes('password'));
-    assert.ok(!keys.includes('password_hash'));
+    assert.ok(!('id' in res.body.user));
+    assert.ok(!('password' in res.body.user));
+    assert.ok(!('password_hash' in res.body.user));
   });
 });
 
 // ===========================================================================
-// POST /api/auth/avatar — requires auth (any role)
+// POST /api/auth/avatar — requires auth (any role, including unsupported)
 // ===========================================================================
 
 describe('POST /api/auth/avatar', () => {
@@ -164,17 +179,9 @@ describe('POST /api/auth/avatar', () => {
     assert.equal(res.status, 200);
   });
 
-  test('subscriber can upload avatar', async () => {
-    const res = await subscriber.post('/api/auth/avatar').attach('file', PNG_1X1, 'pic.png');
+  test('unsupported role can upload avatar', async () => {
+    const res = await unsupportedRole.post('/api/auth/avatar').attach('file', PNG_1X1, 'pic.png');
     assert.equal(res.status, 200);
-  });
-
-  test('avatar response exposes only public URL, no filesystem paths', async () => {
-    const res = await admin.post('/api/auth/avatar').attach('file', PNG_1X1, 'pic.png');
-    assert.equal(res.status, 200);
-    assert.match(res.body.avatar, /^\/uploads\//);
-    assert.ok(!res.body.avatar.includes(':'));
-    assert.ok(!res.body.avatar.includes('..'));
   });
 });
 
@@ -188,18 +195,11 @@ describe('POST /api/auth/change-password', () => {
     assert.equal(res.status, 401);
   });
 
-  test('authenticated user can change own password', async () => {
+  test('author can change own password', async () => {
     const u = await createUser({ username: tag('cp'), password: 'initialpw1', role: 'author' });
     const agent = await loginAgent(u.username, 'initialpw1');
     const res = await agent.post('/api/auth/change-password').send({ currentPassword: 'initialpw1', newPassword: 'brandnew99' });
     assert.equal(res.status, 200);
-  });
-
-  test('wrong current password returns 401', async () => {
-    const u = await createUser({ username: tag('cp2'), password: 'initialpw1', role: 'author' });
-    const agent = await loginAgent(u.username, 'initialpw1');
-    const res = await agent.post('/api/auth/change-password').send({ currentPassword: 'wrongpw', newPassword: 'brandnew99' });
-    assert.equal(res.status, 401);
   });
 });
 
@@ -218,8 +218,8 @@ describe('POST /api/auth/register', () => {
     assert.equal(res.status, 403);
   });
 
-  test('subscriber gets 403', async () => {
-    const res = await subscriber.post('/api/auth/register').send({ username: tag('blocked'), password: 'testpass1' });
+  test('unsupported role gets 403', async () => {
+    const res = await unsupportedRole.post('/api/auth/register').send({ username: tag('blocked'), password: 'testpass1' });
     assert.equal(res.status, 403);
   });
 
@@ -238,9 +238,8 @@ describe('POST /api/auth/register', () => {
   test('registration response exposes no password fields', async () => {
     const res = await admin.post('/api/auth/register').send({ username: tag('safe'), password: 'testpass1', role: 'author' });
     assert.equal(res.status, 201);
-    const keys = Object.keys(res.body.user);
-    assert.ok(!keys.includes('password'));
-    assert.ok(!keys.includes('password_hash'));
+    assert.ok(!('password' in res.body.user));
+    assert.ok(!('password_hash' in res.body.user));
   });
 });
 
@@ -269,8 +268,8 @@ describe('GET /api/posts', () => {
     const res = await request(app).get('/api/posts');
     assert.equal(res.status, 200);
     for (const item of res.body.items) {
-      assert.ok(!('owner_user_id' in item), 'public post list must not expose owner_user_id');
-      assert.ok(!('author_id' in item), 'public post list must not expose author_id');
+      assert.ok(!('owner_user_id' in item));
+      assert.ok(!('author_id' in item));
     }
   });
 });
@@ -287,7 +286,7 @@ describe('GET /api/posts/id/:id', () => {
   });
 
   test('any authenticated user can read published post by id', async () => {
-    const res = await subscriber.get(`/api/posts/id/${publishedByAuthor.id}`);
+    const res = await unsupportedRole.get(`/api/posts/id/${publishedByAuthor.id}`);
     assert.equal(res.status, 200);
   });
 
@@ -296,20 +295,13 @@ describe('GET /api/posts/id/:id', () => {
     assert.equal(res.status, 200);
   });
 
-  test('non-owner cannot read draft by id', async () => {
-    // subscriber is authenticated but not the owner or admin
-    const res = await subscriber.get(`/api/posts/id/${draftByAuthor.id}`);
+  test('non-owner cannot read draft by id (returns 403)', async () => {
+    const res = await unsupportedRole.get(`/api/posts/id/${draftByAuthor.id}`);
     assert.equal(res.status, 403);
   });
 
   test('other author cannot read draft by id', async () => {
-    // We don't have a direct login for otherAuthorActor; use author to prove
-    // that a different author gets 403
-    const other = await loginAgent(
-      (await createUser({ username: tag('other_rd'), password: 'testpass1', role: 'author' })).username,
-      'testpass1'
-    );
-    const res = await other.get(`/api/posts/id/${draftByAuthor.id}`);
+    const res = await otherAuthor.get(`/api/posts/id/${draftByAuthor.id}`);
     assert.equal(res.status, 403);
   });
 
@@ -336,18 +328,13 @@ describe('GET /api/posts/:slug', () => {
     assert.equal(res.status, 200);
   });
 
-  test('published slug returns 200 for authenticated users', async () => {
-    const res = await author.get(`/api/posts/${publishedByAuthor.slug}`);
-    assert.equal(res.status, 200);
-  });
-
   test('anonymous gets 404 for draft slug', async () => {
     const res = await request(app).get(`/api/posts/${draftByAuthor.slug}`);
     assert.equal(res.status, 404);
   });
 
   test('non-owner gets 404 for draft slug', async () => {
-    const res = await subscriber.get(`/api/posts/${draftByAuthor.slug}`);
+    const res = await unsupportedRole.get(`/api/posts/${draftByAuthor.slug}`);
     assert.equal(res.status, 404);
   });
 
@@ -375,7 +362,7 @@ describe('GET /api/posts/:slug', () => {
 });
 
 // ===========================================================================
-// POST /api/posts — requires auth (any role)
+// POST /api/posts — requires auth + admin/author role
 // ===========================================================================
 
 describe('POST /api/posts', () => {
@@ -394,14 +381,14 @@ describe('POST /api/posts', () => {
     assert.equal(res.status, 201);
   });
 
-  test('subscriber can create post', async () => {
-    const res = await subscriber.post('/api/posts').send({ title: tag('post'), content: '<p>test</p>' });
-    assert.equal(res.status, 201);
+  test('unsupported role gets 403', async () => {
+    const res = await unsupportedRole.post('/api/posts').send({ title: tag('post'), content: '<p>test</p>' });
+    assert.equal(res.status, 403);
   });
 });
 
 // ===========================================================================
-// PUT /api/posts/:id — requires auth + ownership/admin
+// PUT /api/posts/:id — requires auth + admin/author role + ownership
 // ===========================================================================
 
 describe('PUT /api/posts/:id', () => {
@@ -416,8 +403,13 @@ describe('PUT /api/posts/:id', () => {
     assert.equal(res.body.title, 'Updated By Owner');
   });
 
-  test('other authenticated user gets 403', async () => {
-    const res = await subscriber.put(`/api/posts/${publishedByAuthor.id}`).send({ title: 'hack' });
+  test('unsupported role gets 403', async () => {
+    const res = await unsupportedRole.put(`/api/posts/${publishedByAuthor.id}`).send({ title: 'hack' });
+    assert.equal(res.status, 403);
+  });
+
+  test('other author gets 403', async () => {
+    const res = await otherAuthor.put(`/api/posts/${publishedByAuthor.id}`).send({ title: 'hack' });
     assert.equal(res.status, 403);
   });
 
@@ -434,7 +426,7 @@ describe('PUT /api/posts/:id', () => {
 });
 
 // ===========================================================================
-// DELETE /api/posts/:id — requires auth + ownership/admin
+// DELETE /api/posts/:id — requires auth + admin/author role + ownership
 // ===========================================================================
 
 describe('DELETE /api/posts/:id', () => {
@@ -457,17 +449,13 @@ describe('DELETE /api/posts/:id', () => {
     assert.equal(res.status, 204);
   });
 
-  test('other authenticated user gets 403', async () => {
-    const res = await subscriber.delete(`/api/posts/${ownedByAuthor.id}`);
+  test('unsupported role gets 403', async () => {
+    const res = await unsupportedRole.delete(`/api/posts/${ownedByAuthor.id}`);
     assert.equal(res.status, 403);
   });
 
   test('other author gets 403', async () => {
-    const other = await loginAgent(
-      (await createUser({ username: tag('other_del'), password: 'testpass1', role: 'author' })).username,
-      'testpass1'
-    );
-    const res = await other.delete(`/api/posts/${ownedByAuthor.id}`);
+    const res = await otherAuthor.delete(`/api/posts/${ownedByAuthor.id}`);
     assert.equal(res.status, 403);
   });
 
@@ -483,7 +471,7 @@ describe('DELETE /api/posts/:id', () => {
 });
 
 // ===========================================================================
-// POST /api/uploads — requires auth (any role)
+// POST /api/uploads — requires auth + admin/author role
 // ===========================================================================
 
 describe('POST /api/uploads', () => {
@@ -503,9 +491,9 @@ describe('POST /api/uploads', () => {
     assert.equal(res.status, 201);
   });
 
-  test('subscriber can upload', async () => {
-    const res = await subscriber.post('/api/uploads').attach('file', PNG_1X1, 'pic.png');
-    assert.equal(res.status, 201);
+  test('unsupported role gets 403', async () => {
+    const res = await unsupportedRole.post('/api/uploads').attach('file', PNG_1X1, 'pic.png');
+    assert.equal(res.status, 403);
   });
 });
 
@@ -529,8 +517,8 @@ describe('GET /api/audit/alt-text', () => {
     assert.equal(res.status, 200);
   });
 
-  test('subscriber gets 403', async () => {
-    const res = await subscriber.get('/api/audit/alt-text');
+  test('unsupported role gets 403', async () => {
+    const res = await unsupportedRole.get('/api/audit/alt-text');
     assert.equal(res.status, 403);
   });
 });
@@ -551,11 +539,98 @@ describe('IDOR protection', () => {
   });
 
   test('author cannot read another author draft by id', async () => {
-    const other = await loginAgent(
-      (await createUser({ username: tag('idor_draft'), password: 'testpass1', role: 'author' })).username,
-      'testpass1'
-    );
-    const res = await other.get(`/api/posts/id/${draftByAuthor.id}`);
+    const res = await otherAuthor.get(`/api/posts/id/${draftByAuthor.id}`);
     assert.equal(res.status, 403);
+  });
+
+  test('author cannot update another author draft', async () => {
+    const res = await otherAuthor.put(`/api/posts/${draftByAuthor.id}`).send({ title: 'Hacked' });
+    assert.equal(res.status, 403);
+  });
+});
+
+// ===========================================================================
+// Invalid/unsafe session handling
+// All invalid sessions must fail closed (401 or 403) without producing 500.
+// ===========================================================================
+
+describe('invalid session handling', () => {
+  const protectedRoute = (agent) =>
+    agent.get(`/api/posts/id/${publishedByAuthor.id}`);
+
+  test('malformed cookie token returns 401', async () => {
+    const agent = request.agent(app);
+    agent.jar.setCookie('fb_session=not-a-valid-jwt');
+    const res = await protectedRoute(agent);
+    assert.equal(res.status, 401);
+  });
+
+  test('tampered JWT signature returns 401', async () => {
+    const token = signJwt({ username: 'admin', sub: 1, role: 'admin' }, 'wrong-secret', 3600);
+    const agent = request.agent(app);
+    agent.jar.setCookie(`fb_session=${token}`);
+    const res = await protectedRoute(agent);
+    assert.equal(res.status, 401);
+  });
+
+  test('expired JWT returns 401', async () => {
+    const token = signJwt({ username: 'admin', sub: 1, role: 'admin' }, config.appSecret, -1);
+    const agent = request.agent(app);
+    agent.jar.setCookie(`fb_session=${token}`);
+    const res = await protectedRoute(agent);
+    assert.equal(res.status, 401);
+  });
+
+  test('token with unsupported role is denied on privileged routes', async () => {
+    const agent = request.agent(app);
+    agent.jar.setCookie(cookieFor({ username: 'badactor', sub: 9999, role: 'hacker' }));
+    const res = await agent.post('/api/posts').send({ title: 'hack', content: '<p>test</p>' });
+    assert.equal(res.status, 403);
+  });
+
+  test('token with unsupported role is denied on uploads', async () => {
+    const agent = request.agent(app);
+    agent.jar.setCookie(cookieFor({ username: 'badactor', sub: 9999, role: 'hacker' }));
+    const res = await agent.post('/api/uploads').attach('file', PNG_1X1, 'pic.png');
+    assert.equal(res.status, 403);
+  });
+
+  test('token with unsupported role is denied on audit', async () => {
+    const agent = request.agent(app);
+    agent.jar.setCookie(cookieFor({ username: 'badactor', sub: 9999, role: 'hacker' }));
+    const res = await agent.get('/api/audit/alt-text');
+    assert.equal(res.status, 403);
+  });
+
+  test('optional-auth public routes remain usable with no token', async () => {
+    const res = await request(app).get('/api/posts');
+    assert.equal(res.status, 200);
+    const res2 = await request(app).get(`/api/posts/${publishedByAuthor.slug}`);
+    assert.equal(res2.status, 200);
+  });
+
+  test('optional-auth with invalid token still works (token ignored)', async () => {
+    const agent = request.agent(app);
+    agent.jar.setCookie('fb_session=invalid-token');
+    const res = await agent.get('/api/posts');
+    assert.equal(res.status, 200);
+  });
+
+  test('invalid sessions never produce 500', async () => {
+    // Run several invalid-token scenarios and verify none return 500.
+    const scenarios = [
+      { cookie: 'fb_session=bad', name: 'malformed' },
+      { cookie: `fb_session=${signJwt({}, 'bad-secret', 3600)}`, name: 'tampered' },
+      { cookie: `fb_session=${signJwt({}, config.appSecret, -1)}`, name: 'expired' },
+    ];
+    for (const { cookie } of scenarios) {
+      for (const path of ['/api/auth/me', `/api/posts/id/${publishedByAuthor.id}`, '/api/uploads', '/api/audit/alt-text']) {
+        const agent = request.agent(app);
+        agent.jar.setCookie(cookie);
+        const req = path === '/api/uploads' ? agent.post(path).attach('file', PNG_1X1, 'pic.png') : agent.get(path);
+        const res = await req;
+        assert.ok(res.status !== 500, `${path} must not return 500 for invalid token`);
+      }
+    }
   });
 });

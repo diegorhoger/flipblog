@@ -31,6 +31,15 @@ export function requireRole(role) {
   };
 }
 
+export function requireAnyRole(...roles) {
+  return (req, res, next) => {
+    if (!req.user || !roles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
+    next();
+  };
+}
+
 // Like requireAuth, but does not reject anonymous requests. It attaches req.user
 // when a valid token is present and otherwise leaves it undefined. Used for
 // public endpoints that show additional (e.g. draft) content to authenticated
