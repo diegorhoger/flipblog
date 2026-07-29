@@ -581,6 +581,22 @@ describe('invalid session handling', () => {
     assert.equal(res.status, 401);
   });
 
+  test('non-numeric sub claim is handled without 500', async () => {
+    const token = signJwt({ username: 'bogus', sub: 'abc', role: 'author' }, config.appSecret, 3600);
+    const agent = request.agent(app);
+    agent.jar.setCookie(`fb_session=${token}`);
+    const res = await protectedRoute(agent);
+    assert.ok(res.status !== 500);
+  });
+
+  test('missing sub claim is handled without 500', async () => {
+    const token = signJwt({ username: 'bogus', role: 'author' }, config.appSecret, 3600);
+    const agent = request.agent(app);
+    agent.jar.setCookie(`fb_session=${token}`);
+    const res = await protectedRoute(agent);
+    assert.ok(res.status !== 500);
+  });
+
   test('token with unsupported role is denied on privileged routes', async () => {
     const agent = request.agent(app);
     agent.jar.setCookie(cookieFor({ username: 'badactor', sub: 9999, role: 'hacker' }));
@@ -622,6 +638,8 @@ describe('invalid session handling', () => {
       { cookie: 'fb_session=bad', name: 'malformed' },
       { cookie: `fb_session=${signJwt({}, 'bad-secret', 3600)}`, name: 'tampered' },
       { cookie: `fb_session=${signJwt({}, config.appSecret, -1)}`, name: 'expired' },
+      { cookie: `fb_session=${signJwt({ username: 'x', sub: 'abc', role: 'author' }, config.appSecret, 3600)}`, name: 'non-numeric sub' },
+      { cookie: `fb_session=${signJwt({ username: 'x', role: 'author' }, config.appSecret, 3600)}`, name: 'missing sub' },
     ];
     for (const { cookie } of scenarios) {
       for (const path of ['/api/auth/me', `/api/posts/id/${publishedByAuthor.id}`, '/api/uploads', '/api/audit/alt-text']) {
