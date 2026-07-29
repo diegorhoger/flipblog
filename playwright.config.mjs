@@ -12,7 +12,6 @@ export default defineConfig({
     command: 'node server/src/index.js',
     url: 'http://localhost:3100/api/health',
     reuseExistingServer: false,
-    cwd: 'E:/Projects/flipblog',
     timeout: 30000,
     env: { PORT: '3100' },
   },
