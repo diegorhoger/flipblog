@@ -44,7 +44,7 @@ Instead, report them privately through one of these channels:
 - JWT-based sessions with HttpOnly, Secure, SameSite=Strict cookies
 - Role-based access control (admin, author)
 - Rate limiting on authentication endpoints (5 failures per 15 min per user/IP)
-- Password hashing with bcrypt (cost factor 12)
+- Password hashing with scrypt (16-byte salt, 64-byte derived key)
 - Account lockout after failed attempts
 
 ### Input Validation
@@ -59,11 +59,10 @@ Instead, report them privately through one of these channels:
 - Passwords never returned in API responses
 - JWT secrets stored in environment variables
 
-### Infrastructure
-- HTTPS enforced in production
-- Security headers (HSTS, CSP, X-Frame-Options, etc.)
-- Dependency scanning via GitHub Dependabot
-- Automated CI security checks
+### Planned (not yet implemented)
+- HTTPS enforcement and TLS termination (handled by reverse proxy)
+- Security response headers (CSP, HSTS, X-Frame-Options, etc.)
+- Automated dependency scanning
 
 ## Secure Configuration
 

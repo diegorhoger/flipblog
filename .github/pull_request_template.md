@@ -70,8 +70,7 @@ All passing
 ## Rollback Plan
 <!-- How to roll back if this PR causes issues in production -->
 1. Revert commit: `git revert <sha>`
-2. Run migrations down: `npm run migrate:down` (if applicable)
-3. Deploy previous artifact
+2. Deploy previous artifact
 
 ## Human Review Gate
 <!-- Required for all PRs per branch protection -->

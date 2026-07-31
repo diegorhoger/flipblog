@@ -74,8 +74,8 @@ git push origin v1.2.0-rc.1
 ```
 
 ### 3. RC Verification
-- CI runs on tag push
-- Deploy RC to staging environment
+- CI runs on tag push (test + e2e only; no auto-deploy)
+- Deploy RC to staging environment (manual step)
 - Run full verification checklist (see RELEASE_CHECKLIST.md)
 - Fix any issues on release branch, create new RC if needed
 
@@ -86,7 +86,7 @@ git tag -a v1.2.0 -m "Release v1.2.0"
 git push origin v1.2.0
 ```
 
-- CI builds and deploys production from tag
+- Deploy the tag or release-branch artifact to production (manual step; no CI/CD pipeline exists yet)
 - Run post-deployment verification
 - Merge release branch back to main
 - Delete release branch (optional)
@@ -159,18 +159,14 @@ git switch -c hotfix/v1.2.1 v1.2.0
 git add .
 git commit -m "fix: critical production issue"
 
-# Tag and deploy
+# Tag (deployment is manual — no CI/CD pipeline exists yet)
 git tag -a v1.2.1 -m "Hotfix v1.2.1"
 git push origin v1.2.1
 
-# Merge to main and release branch
+# Merge to main (and active release branch if one exists)
 git switch main
 git merge hotfix/v1.2.1
 git push origin main
-
-git switch release/v1.2
-git merge hotfix/v1.2.1
-git push origin release/v1.2
 ```
 
 ## Communication
