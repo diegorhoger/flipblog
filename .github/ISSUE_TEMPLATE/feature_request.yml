@@ -1,0 +1,53 @@
+name: Feature Request
+description: Propose a new feature or enhancement
+title: "[FEATURE] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature! Please describe the problem this solves and the proposed solution.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What problem does this feature solve? Who is affected?
+      placeholder: |
+        As a [user type], I want to [action] so that [benefit].
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: How should this work? Include API changes, UI changes, data model changes.
+      placeholder: |
+        - Add endpoint POST /api/...
+        - New database column...
+        - UI component...
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What other approaches did you consider? Why is this the best?
+  - type: checkboxes
+    id: impact
+    attributes:
+      label: Impact Assessment
+      options:
+        - label: Requires database migration
+        - label: Changes public API contract
+        - label: Affects authentication or authorization
+        - label: Requires new dependencies
+        - label: Performance sensitive
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have checked the roadmap for alignment
+          required: true
+        - label: This is not a duplicate of an existing feature request
+          required: true

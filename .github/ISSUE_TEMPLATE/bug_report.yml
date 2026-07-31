@@ -1,0 +1,76 @@
+name: Bug Report
+description: Report a reproducible bug
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please provide a minimal reproduction.
+  - type: input
+    id: version
+    attributes:
+      label: Version / Commit SHA
+      description: The version or commit where the bug occurs
+      placeholder: "b1b3d1b or v1.2.3"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal steps to trigger the bug
+      placeholder: |
+        1. Go to...
+        2. Click...
+        3. Observe...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should happen
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happens (error message, stack trace, screenshot)
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Node version, browser, database state
+      placeholder: |
+        OS: Windows 11 / Ubuntu 22.04
+        Node: 22.x
+        Browser: Chrome 120
+        DB: SQLite (local)
+    validations:
+      required: false
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - Critical (data loss, security, downtime)
+        - High (major feature broken)
+        - Medium (minor feature broken, workaround exists)
+        - Low (cosmetic, minor annoyance)
+    validations:
+      required: true
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have searched existing issues
+          required: true
+        - label: I can reproduce this on a clean checkout
+          required: true
+        - label: This is not a duplicate
+          required: true
