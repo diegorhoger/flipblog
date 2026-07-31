@@ -41,16 +41,15 @@ Instead, report them privately through one of these channels:
 ## Security Measures in Place
 
 ### Authentication & Authorization
-- JWT-based sessions with HttpOnly, Secure, SameSite=Strict cookies
+- JWT-based sessions with HttpOnly, Secure, SameSite=Lax cookies
 - Role-based access control (admin, author)
-- Rate limiting on authentication endpoints (5 failures per 15 min per user/IP)
+- Rate limiting on authentication endpoints (5 failures per 15 min per user/IP, in-memory throttling — not a persistent account lockout)
 - Password hashing with scrypt (16-byte salt, 64-byte derived key)
-- Account lockout after failed attempts
 
 ### Input Validation
 - Server-side validation on all API endpoints
 - Zod schemas for request body validation
-- File upload validation (type, size, extension)
+- File upload validation (MIME type and size; extension checks are not implemented)
 - SQL injection prevention via parameterized queries
 
 ### Data Protection

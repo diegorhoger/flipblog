@@ -37,8 +37,8 @@
 ### RC Creation
 - [ ] Tag RC: `git tag -a v1.2.0-rc.1 -m "Release candidate 1"`
 - [ ] Push tag: `git push origin v1.2.0-rc.1`
-- [ ] RC build triggered and passing
-- [ ] RC deployed to staging environment
+- [ ] Run CI checks manually (tag pushes do not trigger CI yet)
+- [ ] RC deployed to staging environment (manual step)
 
 ### RC Verification
 - [ ] Smoke tests pass on staging

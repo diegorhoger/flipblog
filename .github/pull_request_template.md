@@ -60,8 +60,10 @@ npm run build
 ## Test Results
 <!-- Paste relevant test output or describe what was verified -->
 ```
-Tests: 313 server, 63 web, 3 e2e
-All passing
+Server tests: ___
+Web tests: ___
+E2E tests: ___
+Build: ___
 ```
 
 ## Screenshots / Recordings

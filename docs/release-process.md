@@ -60,8 +60,8 @@ npm version minor --no-git-tag-version
 # or npm version patch / major
 
 # Update CHANGELOG.md
-# Commit version bump and changelog
-git add package.json CHANGELOG.md
+# Commit version bump and changelog (npm version also updates package-lock.json)
+git add package.json package-lock.json CHANGELOG.md
 git commit -m "chore: release v1.2.0"
 git push origin release/v1.2.0
 ```
@@ -74,7 +74,7 @@ git push origin v1.2.0-rc.1
 ```
 
 ### 3. RC Verification
-- CI runs on tag push (test + e2e only; no auto-deploy)
+- CI runs on PRs to `main`; tag-triggered CI is not yet configured
 - Deploy RC to staging environment (manual step)
 - Run full verification checklist (see RELEASE_CHECKLIST.md)
 - Fix any issues on release branch, create new RC if needed
@@ -107,7 +107,7 @@ Branch protection enforces:
 
 ## Database Migrations
 
-- Migrations are SQL files in `server/migrations/`
+- Migrations are JavaScript modules in `server/src/migrations/`
 - Numbered sequentially (001, 002, ...)
 - Applied automatically on server startup
 - **Never** modify applied migrations
@@ -130,11 +130,17 @@ Summary:
 ## Post-Release
 
 ### Merge Back to Main
+`main` is branch-protected and does not accept direct pushes. Merge the release branch back via a pull request:
 ```bash
+# From the release branch
 git switch main
 git pull origin main
-git merge --no-ff release/v1.2.0
-git push origin main
+git switch release/v1.2.0
+git merge main
+# Resolve conflicts, run tests, then open a PR:
+#   base: main, head: release/v1.2.0
+# Require CI (test + e2e) and 1 approving review before merging.
+git push origin release/v1.2.0
 ```
 
 ### Cleanup
@@ -163,10 +169,10 @@ git commit -m "fix: critical production issue"
 git tag -a v1.2.1 -m "Hotfix v1.2.1"
 git push origin v1.2.1
 
-# Merge to main (and active release branch if one exists)
-git switch main
-git merge hotfix/v1.2.1
-git push origin main
+# Merge to main via PR (main is branch-protected, no direct pushes)
+git push origin hotfix/v1.2.1
+# Open a PR: base: main, head: hotfix/v1.2.1
+# Require CI + 1 approving review before merging.
 ```
 
 ## Communication
