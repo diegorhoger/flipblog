@@ -2,7 +2,7 @@ import { test, describe, before, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import request from 'supertest';
-import { app, ADMIN } from './helpers.js';
+import { app, ADMIN, csrfTokenFrom } from './helpers.js';
 import { createLoginRateLimiter, loginLimiter, changePasswordLimiter } from '../src/security/authRateLimiter.js';
 import { authRateLimiter, createAuthRateLimiterFromConfig } from '../src/routes/auth.js';
 import { seedUserIfMissing, createUser } from '../src/services/users.js';
@@ -519,7 +519,10 @@ describe('change-password rate limit integration', () => {
   async function createUserAndLogin(agent) {
     const tag = `cp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     await createUser({ username: tag, password: 'initialpw1', role: 'author' });
-    await agent.post('/api/auth/login').send({ username: tag, password: 'initialpw1' });
+    const login = await agent.post('/api/auth/login').send({ username: tag, password: 'initialpw1' });
+    assert.equal(login.status, 200);
+    const token = csrfTokenFrom(login);
+    if (token) agent.set('x-csrf-token', token);
     return { username: tag, password: 'initialpw1' };
   }
 

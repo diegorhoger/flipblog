@@ -56,11 +56,56 @@ function validatePositiveInt(name, val, fallback, { min = 1, max = Number.MAX_SA
   return n;
 }
 
+// Express trust proxy setting. Accepts the values proxy-addr understands:
+// booleans, a hop count, or a comma-separated list of addresses/CIDRs/'loopback'.
+// Returns null when unset so the production guard can tell "not configured"
+// apart from "explicitly configured to something".
+function resolveTrustProxy(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') value = String(value);
+  if (value === 'true' || value === '1') return true;
+  if (value === 'false' || value === '0') return false;
+  const n = Number(value);
+  if (Number.isInteger(n) && n >= 0) return n;
+  return value;
+}
+
+// Known weak secrets that must never run in production even if long enough.
+const INSECURE_APP_SECRETS = new Set([
+  'dev-insecure-secret-change-me',
+  'test-secret-not-for-production',
+  'secret',
+  'changeme',
+]);
+
+// Production refuses insecure configurations at startup instead of serving a
+// broken/insecure site: weak or known-default signing secrets, and deployments
+// not behind a TLS-terminating reverse proxy (the session and CSRF cookies are
+// marked Secure in production, so direct HTTP serving would break logins).
+function validateProductionSecurity(env, appSecret, trustProxy) {
+  if (env.NODE_ENV !== 'production') return;
+  if (INSECURE_APP_SECRETS.has(appSecret)) {
+    throw new Error('APP_SECRET must not be a known insecure default value in production');
+  }
+  if (!appSecret || appSecret.length < 32) {
+    throw new Error('APP_SECRET must be at least 32 characters long in production');
+  }
+  if (trustProxy === null) {
+    throw new Error('TRUST_PROXY must be set in production: the app must sit behind a TLS-terminating reverse proxy because session/CSRF cookies are marked Secure');
+  }
+  if (trustProxy === false) {
+    throw new Error('TRUST_PROXY must not be explicitly disabled in production');
+  }
+}
+
 // Pure resolver: given an environment object, compute the application config.
 // Exported so tests can verify cwd-independent path resolution without relying
 // on module-level process.env mutation. Paths are always absolute (except the
 // special ':memory:' database).
 export function resolveConfig(env = process.env) {
+  const appSecret = env.APP_SECRET || 'dev-insecure-secret-change-me';
+  const trustProxy = resolveTrustProxy(env.TRUST_PROXY);
+  validateProductionSecurity(env, appSecret, trustProxy);
   const dbPath = (env.DB_PATH?.trim() === ':memory:')
     ? ':memory:'
     : resolvePath(env.DB_PATH, join(serverRoot, 'data', 'flipblog.db'));
@@ -79,7 +124,11 @@ export function resolveConfig(env = process.env) {
   return {
     port: Number(env.PORT) || 3000,
     host: env.HOST || '0.0.0.0',
-    appSecret: env.APP_SECRET || 'dev-insecure-secret-change-me',
+    appSecret,
+    // Reverse proxy trust. Production requires it to be explicitly configured
+    // (see validateProductionSecurity); elsewhere localhost-only trust is the
+    // safe default so req.ip/req.secure work behind a local proxy in dev.
+    trustProxy: trustProxy ?? 'loopback',
     adminUser: env.ADMIN_USER || 'admin',
     adminPassword: env.ADMIN_PASSWORD || 'changeme',
     dbPath,

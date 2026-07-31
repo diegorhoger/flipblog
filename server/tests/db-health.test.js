@@ -411,6 +411,8 @@ test('startup takes a pre-mutation backup before baseline and migrations (real p
     env: {
       ...process.env,
       DB_PATH: dbFile,
+      APP_SECRET: 'startup-test-secret-0123456789abcdef0123456789abcdef',
+      TRUST_PROXY: 'loopback',
       NODE_ENV: 'production', // backups enabled (test mode disables them)
       DB_BACKUP_ENABLED: 'true',
     },
@@ -447,6 +449,8 @@ test('a restart with no pending migrations creates no backup (real process)', ()
   const env = {
     ...process.env,
     DB_PATH: dbFile,
+    APP_SECRET: 'startup-test-secret-0123456789abcdef0123456789abcdef',
+    TRUST_PROXY: 'loopback',
     NODE_ENV: 'production', // backups enabled (test mode disables them)
     DB_BACKUP_ENABLED: 'true',
   };
@@ -507,6 +511,8 @@ test('startup refuses an unknown future migration before any database write (rea
     env: {
       ...process.env,
       DB_PATH: dbFile,
+      APP_SECRET: 'startup-test-secret-0123456789abcdef0123456789abcdef',
+      TRUST_PROXY: 'loopback',
       NODE_ENV: 'production',
       DB_BACKUP_ENABLED: 'true',
     },

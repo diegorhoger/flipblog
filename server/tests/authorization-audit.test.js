@@ -1,7 +1,7 @@
 import { test, describe, before } from 'node:test';
 import assert from 'node:assert/strict';
 import request from 'supertest';
-import { app, ADMIN } from './helpers.js';
+import { app, ADMIN, loginAndAttachCsrf } from './helpers.js';
 import { seedUserIfMissing, createUser } from '../src/services/users.js';
 import { createPost } from '../src/services/posts.js';
 import { signJwt } from '../src/auth/jwt.js';
@@ -17,10 +17,7 @@ function tag(prefix) {
 }
 
 async function loginAgent(username, password) {
-  const agent = request.agent(app);
-  const res = await agent.post('/api/auth/login').send({ username, password });
-  if (res.status !== 200) throw new Error(`login failed for ${username}: ${res.status}`);
-  return agent;
+  return loginAndAttachCsrf(request.agent(app), username, password);
 }
 
 function cookieFor(payload) {

@@ -7,6 +7,8 @@ import { ApiError } from './errors.js';
 import { logger } from './logging.js';
 import { createErrorHandler } from './errorHandler.js';
 import { requestId } from './middleware/requestId.js';
+import { securityHeaders } from './middleware/securityHeaders.js';
+import { csrfProtection } from './security/csrf.js';
 import authRoutes from './routes/auth.js';
 import postRoutes from './routes/posts.js';
 import uploadRoutes from './routes/uploads.js';
@@ -37,8 +39,20 @@ export function createApp() {
   // (the JSON body parser), so malformed/oversized bodies and every other
   // response still carry a stable X-Request-ID that ties the client to the logs.
   app.use(requestId({ log: logger }));
+
+  // Trust proxy must be set before any middleware that relies on req.ip/req.secure
+  // (rate limiting, cookie Secure handling behind a TLS-terminating proxy).
+  app.set('trust proxy', config.trustProxy);
+
+  // Security response headers are applied first so every response (including
+  // errors) carries the hardened browser headers.
+  app.use(securityHeaders());
+
   app.use(parseCookies);
   app.use(express.json({ limit: '2mb' }));
+
+  // Double-submit CSRF defense for cookie-authenticated state-changing requests.
+  app.use(csrfProtection);
 
   app.use('/api', (req, res, next) => {
     res.set('Cache-Control', 'no-store');

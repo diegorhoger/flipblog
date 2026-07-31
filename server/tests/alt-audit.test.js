@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { app, request, authedAgent } from './helpers.js';
+import { app, request, authedAgent, loginAndAttachCsrf } from './helpers.js';
 import { getDb } from '../src/db.js';
 import { createUser, seedUserIfMissing } from '../src/services/users.js';
 import { createPost } from '../src/services/posts.js';
@@ -179,8 +179,7 @@ test('an author sees findings only for their own posts', async () => {
   // Register + log in as the author, then create their own post.
   const username = `owner_${Date.now()}`;
   await createUser({ username, password: 'sup3rsecret', role: 'author' });
-  const authorAgent = request.agent(app);
-  await authorAgent.post('/api/auth/login').send({ username, password: 'sup3rsecret' });
+  const authorAgent = await loginAndAttachCsrf(request.agent(app), username, 'sup3rsecret');
   await authorAgent
     .post('/api/posts')
     .send({ title: 'Author owned', content: '<p><img src="/uploads/mine.png"></p>' });

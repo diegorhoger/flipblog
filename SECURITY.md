@@ -42,9 +42,16 @@ Instead, report them privately through one of these channels:
 
 ### Authentication & Authorization
 - JWT-based sessions with HttpOnly, Secure, SameSite=Lax cookies
+- CSRF protection via double-submit tokens: a readable CSRF cookie issued at login must be echoed back as an `x-csrf-token` header on every cookie-authenticated state-changing request (POST/PUT/PATCH/DELETE)
 - Role-based access control (admin, author)
 - Rate limiting on authentication endpoints (5 failures per 15 min per user/IP, in-memory throttling — not a persistent account lockout)
 - Password hashing with scrypt (16-byte salt, 64-byte derived key)
+
+### Browser Security Headers
+- `Content-Security-Policy` locking scripts, connections, fonts, objects, forms and frames to the same origin (`style-src` additionally allows inline styles because post content is user-authored and sanitized to permit them)
+- `X-Frame-Options: SAMEORIGIN` and `frame-ancestors 'self'` against clickjacking
+- `X-Content-Type-Options: nosniff` and `Referrer-Policy: strict-origin-when-cross-origin`
+- `Strict-Transport-Security` (HSTS) emitted only in production
 
 ### Input Validation
 - Server-side validation on all API endpoints
@@ -59,19 +66,26 @@ Instead, report them privately through one of these channels:
 - JWT secrets stored in environment variables
 
 ### Planned (not yet implemented)
-- HTTPS enforcement and TLS termination (handled by reverse proxy)
-- Security response headers (CSP, HSTS, X-Frame-Options, etc.)
 - Automated dependency scanning
 
 ## Secure Configuration
 
+The server refuses to start with an insecure production configuration: it fails on
+weak/known-default `APP_SECRET` values and on missing `TRUST_PROXY` (session and
+CSRF cookies are marked `Secure` in production, so the app must sit behind a
+TLS-terminating reverse proxy). Configure your reverse proxy to forward
+`X-Forwarded-Proto` and `X-Forwarded-For` and set `TRUST_PROXY` to the addresses
+or hop count you are willing to trust (e.g. `loopback`, a CIDR like `10.0.0.0/8`,
+a hop count like `1`, or a comma-separated list).
+
 Required environment variables for production:
 
 ```env
-APP_SECRET=<32+ character random string>
+APP_SECRET=<32+ character random string, not a known default>
 DB_PATH=/path/to/production.db
 DB_BACKUP_ENABLED=true
 DB_BACKUP_RETENTION=5
+TRUST_PROXY=loopback            # or your proxy addresses/CIDR/hop count
 AUTH_RATE_LIMIT_MAX_FAILURES=5
 AUTH_RATE_LIMIT_WINDOW_MS=900000
 AUTH_RATE_LIMIT_MAX_ENTRIES=10000
@@ -102,4 +116,4 @@ Out of scope:
 
 ---
 
-*Last updated: 2026-07-29*
+*Last updated: 2026-07-31*

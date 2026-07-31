@@ -1,5 +1,19 @@
+const CSRF_COOKIE = 'fb_csrf';
+const CSRF_HEADER = 'x-csrf-token';
+
+// Double-submit CSRF: read the server-issued token cookie and echo it back on
+// state-changing requests so the server can verify both halves match.
+function csrfToken() {
+  const match = document.cookie.match(/(?:^|;\s*)fb_csrf=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 async function request(method, path, { body, isForm = false } = {}) {
   const opts = { method, credentials: 'same-origin', headers: {} };
+  if (method !== 'GET' && method !== 'HEAD') {
+    const token = csrfToken();
+    if (token) opts.headers[CSRF_HEADER] = token;
+  }
   if (body !== undefined) {
     if (isForm) {
       opts.body = body;

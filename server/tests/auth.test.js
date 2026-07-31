@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { app, request, ADMIN, authedAgent } from './helpers.js';
+import { app, request, ADMIN, authedAgent, loginAndAttachCsrf } from './helpers.js';
 import { createUser } from '../src/services/users.js';
 
 test('login fails with wrong password', async () => {
@@ -72,11 +72,7 @@ test('non-admin users cannot register new users', async () => {
   const agent = await authedAgent();
   const author = await createUser({ username: `author_${Date.now()}`, password: 'sup3rsecret', role: 'author' });
 
-  const authorAgent = request.agent(app);
-  const login = await authorAgent
-    .post('/api/auth/login')
-    .send({ username: author.username, password: 'sup3rsecret' });
-  assert.equal(login.status, 200);
+  const authorAgent = await loginAndAttachCsrf(request.agent(app), author.username, 'sup3rsecret');
 
   const blocked = await authorAgent
     .post('/api/auth/register')
@@ -102,9 +98,7 @@ test('me returns username, role and created_at', async () => {
 
 test('user can change their own password', async () => {
   const created = await createUser({ username: `pw_${Date.now()}`, password: 'initialpw1', role: 'author' });
-  const agent = request.agent(app);
-  const login = await agent.post('/api/auth/login').send({ username: created.username, password: 'initialpw1' });
-  assert.equal(login.status, 200);
+  const agent = await loginAndAttachCsrf(request.agent(app), created.username, 'initialpw1');
 
   const change = await agent
     .post('/api/auth/change-password')
@@ -124,8 +118,7 @@ test('user can change their own password', async () => {
 
 test('change-password rejects a wrong current password', async () => {
   const created = await createUser({ username: `pw2_${Date.now()}`, password: 'initialpw1', role: 'author' });
-  const agent = request.agent(app);
-  await agent.post('/api/auth/login').send({ username: created.username, password: 'initialpw1' });
+  const agent = await loginAndAttachCsrf(request.agent(app), created.username, 'initialpw1');
   const change = await agent
     .post('/api/auth/change-password')
     .send({ currentPassword: 'wrongpw', newPassword: 'brandnew99' });
@@ -134,8 +127,7 @@ test('change-password rejects a wrong current password', async () => {
 
 test('change-password rejects a weak new password', async () => {
   const created = await createUser({ username: `pw3_${Date.now()}`, password: 'initialpw1', role: 'author' });
-  const agent = request.agent(app);
-  await agent.post('/api/auth/login').send({ username: created.username, password: 'initialpw1' });
+  const agent = await loginAndAttachCsrf(request.agent(app), created.username, 'initialpw1');
   const change = await agent
     .post('/api/auth/change-password')
     .send({ currentPassword: 'initialpw1', newPassword: 'short' });
