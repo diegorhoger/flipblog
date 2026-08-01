@@ -13,7 +13,7 @@ test('every API response carries the hardened browser security headers', async (
   assert.match(csp, /default-src 'self'/);
   assert.match(csp, /script-src 'self'/);
   assert.match(csp, /style-src 'self' 'unsafe-inline'/);
-  assert.match(csp, /img-src 'self' data:/);
+  assert.match(csp, /img-src 'self' data: https:/);
   assert.match(csp, /connect-src 'self'/);
   assert.match(csp, /object-src 'none'/);
   assert.match(csp, /base-uri 'self'/);

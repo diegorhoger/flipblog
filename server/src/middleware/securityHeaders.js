@@ -5,6 +5,10 @@
 //   * style-src needs 'unsafe-inline' because post content is user-authored and
 //     sanitized to allow inline styles (see services/sanitize.js allowedStyles)
 //     and the Quill editor injects inline styles/`<style>` for its toolbar.
+//   * img-src additionally permits https: (and data:) images because post
+//     content and cover_image may legitimately reference remote images — the
+//     sanitizer preserves http/https image srcs by design. Scripts, connections,
+//     fonts and frames stay locked to the same origin.
 //   * No external scripts, fonts, or origins are used by the web client (assets
 //     are bundled and same-origin), so everything else is locked to 'self'.
 //   * frame-ancestors 'self' (modern) + X-Frame-Options SAMEORIGIN (legacy)
@@ -13,7 +17,7 @@ const CSP = [
   "default-src 'self'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data:",
+  "img-src 'self' data: https:",
   "font-src 'self'",
   "connect-src 'self'",
   "object-src 'none'",

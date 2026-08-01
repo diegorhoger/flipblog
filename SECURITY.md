@@ -48,7 +48,7 @@ Instead, report them privately through one of these channels:
 - Password hashing with scrypt (16-byte salt, 64-byte derived key)
 
 ### Browser Security Headers
-- `Content-Security-Policy` locking scripts, connections, fonts, objects, forms and frames to the same origin (`style-src` additionally allows inline styles because post content is user-authored and sanitized to permit them)
+- `Content-Security-Policy` locking scripts, connections, fonts, objects, forms and frames to the same origin (`style-src` additionally allows inline styles because post content is user-authored and sanitized to permit them; `img-src` allows same-origin, `data:`, and `https:` images because post content and cover images may legitimately reference remote images)
 - `X-Frame-Options: SAMEORIGIN` and `frame-ancestors 'self'` against clickjacking
 - `X-Content-Type-Options: nosniff` and `Referrer-Policy: strict-origin-when-cross-origin`
 - `Strict-Transport-Security` (HSTS) emitted only in production
