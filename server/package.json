@@ -8,6 +8,8 @@
     "dev": "node --no-warnings --watch src/index.js",
     "start": "node --no-warnings src/index.js",
     "test": "node --no-warnings --env-file=.env.test --test-concurrency=1 --test \"tests/*.test.js\"",
+    "backup:offsite": "node --no-warnings scripts/offsite-backup.js",
+    "restore:drill": "node --no-warnings scripts/restore-drill.js",
     "lint": "node scripts/lint.js"
   },
   "dependencies": {
