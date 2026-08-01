@@ -91,6 +91,19 @@ AUTH_RATE_LIMIT_WINDOW_MS=900000
 AUTH_RATE_LIMIT_MAX_ENTRIES=10000
 ```
 
+### Offsite backups
+
+Encrypted (AES-256-GCM) offsite backups live in a destination independent of the
+application disk; see `docs/backup-and-recovery.md`. Production refuses to start
+with offsite backups enabled but missing a destination directory or a valid key.
+
+```env
+BACKUP_OFFSITE_ENABLED=true
+BACKUP_OFFSITE_DIR=/mnt/offsite-backups    # independent of the app disk
+BACKUP_OFFSITE_KEY=<64 hex chars or base64, 32-byte AES key>
+BACKUP_OFFSITE_RETENTION=5
+```
+
 ## Vulnerability Disclosure
 
 We follow responsible disclosure. We will:

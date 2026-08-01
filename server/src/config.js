@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { isValidBackupKey } from './offsite-backup.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 // Stable anchor for all runtime storage paths. Resolving relative env paths
@@ -96,7 +97,7 @@ const INSECURE_APP_SECRETS = new Set([
 // broken/insecure site: weak or known-default signing secrets, and deployments
 // not behind a TLS-terminating reverse proxy (the session and CSRF cookies are
 // marked Secure in production, so direct HTTP serving would break logins).
-function validateProductionSecurity(env, appSecret, trustProxy) {
+function validateProductionSecurity(env, appSecret, trustProxy, backupOffsite) {
   if (env.NODE_ENV !== 'production') return;
   if (INSECURE_APP_SECRETS.has(appSecret)) {
     throw new Error('APP_SECRET must not be a known insecure default value in production');
@@ -112,6 +113,14 @@ function validateProductionSecurity(env, appSecret, trustProxy) {
   if (trustProxy === false || trustProxy === 0) {
     throw new Error('TRUST_PROXY must trust at least the TLS-terminating reverse proxy in production');
   }
+  if (backupOffsite.enabled) {
+    if (!backupOffsite.dir) {
+      throw new Error('BACKUP_OFFSITE_DIR must be set when BACKUP_OFFSITE_ENABLED=true in production');
+    }
+    if (!isValidBackupKey(backupOffsite.key)) {
+      throw new Error('BACKUP_OFFSITE_KEY must be a 32-byte AES key (64 hex chars or base64) when BACKUP_OFFSITE_ENABLED=true in production');
+    }
+  }
 }
 
 // Pure resolver: given an environment object, compute the application config.
@@ -121,7 +130,6 @@ function validateProductionSecurity(env, appSecret, trustProxy) {
 export function resolveConfig(env = process.env) {
   const appSecret = env.APP_SECRET || 'dev-insecure-secret-change-me';
   const trustProxy = resolveTrustProxy(env.TRUST_PROXY);
-  validateProductionSecurity(env, appSecret, trustProxy);
   const dbPath = (env.DB_PATH?.trim() === ':memory:')
     ? ':memory:'
     : resolvePath(env.DB_PATH, join(serverRoot, 'data', 'flipblog.db'));
@@ -136,6 +144,17 @@ export function resolveConfig(env = process.env) {
   const realDbPath = isMemory ? join(serverRoot, 'data', 'flipblog.db') : dbPath;
   const dbBackupDir = resolvePath(env.DB_BACKUP_DIR?.trim(), join(dirname(realDbPath), 'backups'));
   const dbBackupRetention = Number(env.DB_BACKUP_RETENTION) > 0 ? Number(env.DB_BACKUP_RETENTION) : 5;
+  // Offsite backups are encrypted copies pushed to a destination independent of
+  // the application disk. Opt-in via BACKUP_OFFSITE_ENABLED=true; in production
+  // an enabled offsite backup MUST also configure the destination directory and
+  // a 32-byte encryption key (validated above).
+  const backupOffsite = {
+    enabled: env.BACKUP_OFFSITE_ENABLED === 'true',
+    dir: resolvePath(env.BACKUP_OFFSITE_DIR?.trim(), ''),
+    key: env.BACKUP_OFFSITE_KEY?.trim() || '',
+    retention: Number(env.BACKUP_OFFSITE_RETENTION) > 0 ? Number(env.BACKUP_OFFSITE_RETENTION) : 5,
+  };
+  validateProductionSecurity(env, appSecret, trustProxy, backupOffsite);
 
   return {
     port: Number(env.PORT) || 3000,
@@ -157,6 +176,10 @@ export function resolveConfig(env = process.env) {
     dbBackupEnabled,
     dbBackupDir,
     dbBackupRetention,
+    backupOffsiteEnabled: backupOffsite.enabled,
+    backupOffsiteDir: backupOffsite.dir,
+    backupOffsiteKey: backupOffsite.key,
+    backupOffsiteRetention: backupOffsite.retention,
     authRateLimitMaxFailures: validatePositiveInt('AUTH_RATE_LIMIT_MAX_FAILURES', env.AUTH_RATE_LIMIT_MAX_FAILURES, 5, { min: 1, max: 100 }),
     authRateLimitWindowMs: validatePositiveInt('AUTH_RATE_LIMIT_WINDOW_MS', env.AUTH_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000, { min: 1000, max: 86_400_000 }),
     authRateLimitMaxEntries: validatePositiveInt('AUTH_RATE_LIMIT_MAX_ENTRIES', env.AUTH_RATE_LIMIT_MAX_ENTRIES, 10000, { min: 100, max: 100_000 }),

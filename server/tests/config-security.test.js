@@ -70,3 +70,85 @@ test('trust proxy accepts the supported proxy-addr values', () => {
   assert.equal(resolveConfig({ TRUST_PROXY: '10.0.0.0/8' }).trustProxy, '10.0.0.0/8');
   assert.equal(resolveConfig({ TRUST_PROXY: 'loopback, 10.0.0.1' }).trustProxy, 'loopback, 10.0.0.1');
 });
+
+const OFF_SITE_KEY = 'a'.repeat(64);
+
+test('offsite backups are disabled by default and resolved from env', () => {
+  const cfg = resolveConfig({ NODE_ENV: 'development' });
+  assert.equal(cfg.backupOffsiteEnabled, false);
+  assert.equal(cfg.backupOffsiteDir, '');
+  assert.equal(cfg.backupOffsiteKey, '');
+  assert.equal(cfg.backupOffsiteRetention, 5);
+});
+
+test('offsite backups resolve dir, key, and retention when enabled', () => {
+  const cfg = resolveConfig({
+    NODE_ENV: 'development',
+    BACKUP_OFFSITE_ENABLED: 'true',
+    BACKUP_OFFSITE_DIR: '/mnt/backups',
+    BACKUP_OFFSITE_KEY: OFF_SITE_KEY,
+    BACKUP_OFFSITE_RETENTION: '14',
+  });
+  assert.equal(cfg.backupOffsiteEnabled, true);
+  assert.equal(cfg.backupOffsiteDir, '/mnt/backups');
+  assert.equal(cfg.backupOffsiteKey, OFF_SITE_KEY);
+  assert.equal(cfg.backupOffsiteRetention, 14);
+});
+
+test('offsite backups resolve relative dir against serverRoot', () => {
+  const cfg = resolveConfig({
+    NODE_ENV: 'development',
+    BACKUP_OFFSITE_ENABLED: 'true',
+    BACKUP_OFFSITE_DIR: 'backups/offsite',
+    BACKUP_OFFSITE_KEY: OFF_SITE_KEY,
+  });
+  assert.match(cfg.backupOffsiteDir, /backups[\\/]offsite$/);
+  assert.ok(cfg.backupOffsiteDir.startsWith('C:') || cfg.backupOffsiteDir.startsWith('/') || /^[A-Za-z]:[\\/]/.test(cfg.backupOffsiteDir), 'dir is absolute');
+});
+
+test('production refuses offsite backups without a destination directory', () => {
+  assert.throws(
+    () =>
+      resolveConfig({
+        ...PROD,
+        BACKUP_OFFSITE_ENABLED: 'true',
+        BACKUP_OFFSITE_KEY: OFF_SITE_KEY,
+      }),
+    /BACKUP_OFFSITE_DIR/
+  );
+});
+
+test('production refuses offsite backups without a valid encryption key', () => {
+  assert.throws(
+    () =>
+      resolveConfig({
+        ...PROD,
+        BACKUP_OFFSITE_ENABLED: 'true',
+        BACKUP_OFFSITE_DIR: '/mnt/backups',
+        BACKUP_OFFSITE_KEY: '',
+      }),
+    /BACKUP_OFFSITE_KEY/
+  );
+  assert.throws(
+    () =>
+      resolveConfig({
+        ...PROD,
+        BACKUP_OFFSITE_ENABLED: 'true',
+        BACKUP_OFFSITE_DIR: '/mnt/backups',
+        BACKUP_OFFSITE_KEY: 'too-short',
+      }),
+    /BACKUP_OFFSITE_KEY/
+  );
+});
+
+test('production accepts a complete, valid offsite configuration', () => {
+  const cfg = resolveConfig({
+    ...PROD,
+    BACKUP_OFFSITE_ENABLED: 'true',
+    BACKUP_OFFSITE_DIR: '/mnt/backups',
+    BACKUP_OFFSITE_KEY: OFF_SITE_KEY,
+  });
+  assert.equal(cfg.backupOffsiteEnabled, true);
+  assert.equal(cfg.backupOffsiteDir, '/mnt/backups');
+  assert.equal(cfg.backupOffsiteKey, OFF_SITE_KEY);
+});

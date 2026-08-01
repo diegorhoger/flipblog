@@ -257,6 +257,22 @@ the rest.
 > operator mistakes, or deploying code against the wrong database file. The startup backup is the
 > safety net for those cases.
 
+### Offsite backups and the restore drill
+
+The startup backup lives on the same disk as the database. For disaster recovery, encrypted copies
+are pushed to a destination independent of the application disk (see
+[`docs/backup-and-recovery.md`](docs/backup-and-recovery.md) for the full guide):
+
+```bash
+# server/
+node scripts/offsite-backup.js      # push newest local backup as an AES-256-GCM .enc copy
+node scripts/restore-drill.js       # restore newest offsite backup, boot, and smoke-test it
+```
+
+The drill restores into a clean environment, re-applies pending migrations, and verifies integrity,
+foreign keys, login, and the reader API — recording RTO and RPO in a JSON report. A truncated,
+tampered, or wrong-key backup is rejected on restore, never silently accepted.
+
 ### Restoring a backup
 
 1. **Stop the server** so the database file is not being written.
@@ -295,6 +311,7 @@ the rest.
 - [ ] `APP_SECRET` set to a long random value; `ADMIN_PASSWORD` changed from the default.
 - [ ] `DB_PATH` points at durable, backed-up storage (not an ephemeral container volume).
 - [ ] `DB_BACKUP_DIR` (if overridden) is on the same durable volume and included in your backup strategy.
+- [ ] Offsite backups are enabled (`BACKUP_OFFSITE_DIR` + `BACKUP_OFFSITE_KEY`) and the restore drill has been run at least once.
 - [ ] Reverse proxy sets `X-Forwarded-*` and terminates TLS so the `secure` cookie flag applies.
 - [ ] Liveness probe → `/api/health/live`; readiness probe → `/api/health/ready` (both return non-2xx only on real failure).
 - [ ] A monitoring alert fires on `GET /api/health/ready` returning `503`.
