@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { app, request, authedAgent } from './helpers.js';
+import { app, request, authedAgent, loginAndAttachCsrf } from './helpers.js';
 import { getDb } from '../src/db.js';
 import { config } from '../src/config.js';
 import { createUser } from '../src/services/users.js';
@@ -52,9 +52,7 @@ test('an unexpected route error surfaces as a generic 500 without leaking intern
     password: 'initialpw1',
     role: 'author',
   });
-  const agent = request.agent(app);
-  const login = await agent.post('/api/auth/login').send({ username: created.username, password: 'initialpw1' });
-  assert.equal(login.status, 200);
+  const agent = await loginAndAttachCsrf(request.agent(app), created.username, 'initialpw1');
 
   const db = getDb();
   db.exec("CREATE TEMP TRIGGER fail_pw_update BEFORE UPDATE ON users BEGIN SELECT RAISE(ABORT, 'boom'); END;");
@@ -147,8 +145,7 @@ test('a non-admin author is forbidden from admin-only registration with 403', as
     password: 'sup3rsecret',
     role: 'author',
   });
-  const agent = request.agent(app);
-  await agent.post('/api/auth/login').send({ username: author.username, password: 'sup3rsecret' });
+  const agent = await loginAndAttachCsrf(request.agent(app), author.username, 'sup3rsecret');
   const res = await agent
     .post('/api/auth/register')
     .send({ username: `x_${randomUUID().slice(0, 8)}`, password: 'sup3rsecret' });

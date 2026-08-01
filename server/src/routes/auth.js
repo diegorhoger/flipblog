@@ -20,6 +20,7 @@ import {
   changePasswordLimiter as changePasswordRateLimit,
 } from '../security/authRateLimiter.js';
 import { logger } from '../logging.js';
+import { setCsrfCookie } from '../security/csrf.js';
 
 const router = Router();
 
@@ -54,6 +55,9 @@ router.post('/login', validateBody(loginSchema), loginRateLimit(authRateLimiter,
     const user = await authenticate(username, password);
     if (!user) return res.status(401).json({ error: 'invalid_credentials' });
     setSessionCookie(res, user);
+    // Issue the double-submit CSRF token alongside the session so the client has
+    // it before its first state-changing request.
+    setCsrfCookie(res);
     res.json({ user: { username: user.username, role: user.role } });
   } catch (err) {
     next(err);

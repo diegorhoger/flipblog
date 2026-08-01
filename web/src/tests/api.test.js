@@ -10,6 +10,7 @@ function fakeFetch(json, { ok = true, status = 200 } = {}) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  document.cookie = 'fb_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
 });
 
 describe('api client', () => {
@@ -98,5 +99,25 @@ describe('api client', () => {
     expect(url).toBe('/api/auth/change-password');
     expect(init.method).toBe('POST');
     expect(JSON.parse(init.body)).toEqual({ currentPassword: 'oldpw', newPassword: 'newsup3rsecret' });
+  });
+
+  it('sends the CSRF token header on state-changing requests when the cookie is set', async () => {
+    document.cookie = 'fb_csrf=abc123; path=/';
+    const fetchMock = fakeFetch({ id: 2, slug: 'novo' }, { status: 201 });
+    vi.stubGlobal('fetch', fetchMock);
+    const { api } = await import('../lib/api.js');
+    await api.createPost({ title: 'novo' });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers['x-csrf-token']).toBe('abc123');
+  });
+
+  it('does not send the CSRF header on GET requests', async () => {
+    document.cookie = 'fb_csrf=abc123; path=/';
+    const fetchMock = fakeFetch({ items: [], total: 0, page: 1, limit: 12, pages: 0 });
+    vi.stubGlobal('fetch', fetchMock);
+    const { api } = await import('../lib/api.js');
+    await api.getPosts();
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers['x-csrf-token']).toBeUndefined();
   });
 });

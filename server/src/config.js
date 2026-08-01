@@ -56,11 +56,72 @@ function validatePositiveInt(name, val, fallback, { min = 1, max = Number.MAX_SA
   return n;
 }
 
+// Express trust proxy setting. Accepts the values proxy-addr understands:
+// a numeric hop count (e.g. '1' -> trusts only the single closest proxy),
+// boolean false, or a comma-separated list of addresses/CIDRs/'loopback'.
+// Unbounded boolean `true` (trust every proxy) is intentionally NOT supported
+// because it lets spoofed forwarded headers be taken at face value. Returns
+// null when unset so the production guard can tell "not configured" apart from
+// "explicitly configured to something".
+function resolveTrustProxy(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') value = String(value);
+  // Hop counts are parsed BEFORE boolean aliases so TRUST_PROXY=1 becomes the
+  // bounded numeric hop count 1, never the unbounded boolean `true`.
+  if (/^\d+$/.test(value)) {
+    const n = Number(value);
+    if (!Number.isSafeInteger(n)) {
+      throw new Error(`Invalid TRUST_PROXY: hop count "${value}" is out of range`);
+    }
+    return n;
+  }
+  if (value === 'true') {
+    throw new Error('TRUST_PROXY=true (trust all proxies) is not supported: use a bounded hop count or an explicit address list');
+  }
+  if (value === 'false') return false;
+  // Any other string (loopback, CIDR, IP, comma-separated list) is passed
+  // through for Express/proxy-addr to compile at app startup.
+  return value;
+}
+
+// Known weak secrets that must never run in production even if long enough.
+const INSECURE_APP_SECRETS = new Set([
+  'dev-insecure-secret-change-me',
+  'test-secret-not-for-production',
+  'secret',
+  'changeme',
+]);
+
+// Production refuses insecure configurations at startup instead of serving a
+// broken/insecure site: weak or known-default signing secrets, and deployments
+// not behind a TLS-terminating reverse proxy (the session and CSRF cookies are
+// marked Secure in production, so direct HTTP serving would break logins).
+function validateProductionSecurity(env, appSecret, trustProxy) {
+  if (env.NODE_ENV !== 'production') return;
+  if (INSECURE_APP_SECRETS.has(appSecret)) {
+    throw new Error('APP_SECRET must not be a known insecure default value in production');
+  }
+  if (!appSecret || appSecret.length < 32) {
+    throw new Error('APP_SECRET must be at least 32 characters long in production');
+  }
+  if (trustProxy === null) {
+    throw new Error('TRUST_PROXY must be set in production: the app must sit behind a TLS-terminating reverse proxy because session/CSRF cookies are marked Secure');
+  }
+  // Explicitly disabled (false) or zero-hop trust trusts no proxy, so Secure
+  // cookies would break behind a TLS-terminating reverse proxy.
+  if (trustProxy === false || trustProxy === 0) {
+    throw new Error('TRUST_PROXY must trust at least the TLS-terminating reverse proxy in production');
+  }
+}
+
 // Pure resolver: given an environment object, compute the application config.
 // Exported so tests can verify cwd-independent path resolution without relying
 // on module-level process.env mutation. Paths are always absolute (except the
 // special ':memory:' database).
 export function resolveConfig(env = process.env) {
+  const appSecret = env.APP_SECRET || 'dev-insecure-secret-change-me';
+  const trustProxy = resolveTrustProxy(env.TRUST_PROXY);
+  validateProductionSecurity(env, appSecret, trustProxy);
   const dbPath = (env.DB_PATH?.trim() === ':memory:')
     ? ':memory:'
     : resolvePath(env.DB_PATH, join(serverRoot, 'data', 'flipblog.db'));
@@ -79,7 +140,11 @@ export function resolveConfig(env = process.env) {
   return {
     port: Number(env.PORT) || 3000,
     host: env.HOST || '0.0.0.0',
-    appSecret: env.APP_SECRET || 'dev-insecure-secret-change-me',
+    appSecret,
+    // Reverse proxy trust. Production requires it to be explicitly configured
+    // (see validateProductionSecurity); elsewhere localhost-only trust is the
+    // safe default so req.ip/req.secure work behind a local proxy in dev.
+    trustProxy: trustProxy ?? 'loopback',
     adminUser: env.ADMIN_USER || 'admin',
     adminPassword: env.ADMIN_PASSWORD || 'changeme',
     dbPath,

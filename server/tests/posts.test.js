@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { app, request, authedAgent } from './helpers.js';
+import { app, request, authedAgent, loginAndAttachCsrf } from './helpers.js';
 
 test('list is empty initially and paginates', async () => {
   const res = await request(app).get('/api/posts');
@@ -156,9 +156,7 @@ test('ownership: a non-owner author cannot edit another author’s post', async 
   const id = created.body.id;
 
   // Log in as author2.
-  const intruder = request.agent(app);
-  const login = await intruder.post('/api/auth/login').send({ username: 'author2', password: 'password2' });
-  assert.equal(login.status, 200);
+  const intruder = await loginAndAttachCsrf(request.agent(app), 'author2', 'password2');
 
   const forbidden = await intruder.put(`/api/posts/${id}`).send({ title: 'Hack' });
   assert.equal(forbidden.status, 403);
@@ -185,8 +183,7 @@ test('ownership: a non-owner author cannot delete another author’s post', asyn
   const created = await owner.post('/api/posts').send({ title: 'Alvo', content: '<p>x</p>' });
   const id = created.body.id;
 
-  const intruder = request.agent(app);
-  await intruder.post('/api/auth/login').send({ username: 'author3', password: 'password3' });
+  const intruder = await loginAndAttachCsrf(request.agent(app), 'author3', 'password3');
 
   const forbidden = await intruder.delete(`/api/posts/${id}`);
   assert.equal(forbidden.status, 403);
