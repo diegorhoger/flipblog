@@ -4,6 +4,12 @@
 > for all follow-up implementation work. Parent epic: #22.
 >
 > **Status: SELECTED.** Implementation issues #34, #35, #36 reference this document.
+>
+> **Decision-record coverage** (from Issue #33): hosting model §3.1 · process
+> supervision §3.2 · reverse proxy + TLS §3.3 · domain + DNS §3.4 · persistent
+> SQLite + uploads §3.5 · backup destination §3.6 · secrets §3.7 · deployment +
+> rollback §3.8 · health + monitoring §3.9 · traffic/availability/maintenance/cost
+> §3.10–§3.11 · scale-out / SQLite-exit conditions §4–§5.
 
 ## 1. Decision summary
 
@@ -25,7 +31,7 @@ production without `TRUST_PROXY` set, because session and CSRF cookies are marke
     │  :443 HTTPS
 ┌───▼───────────────┐
 │      Caddy        │  TLS termination (Let's Encrypt auto certs)
-│  :443 → :3000     │  waits X-Forwarded-For / X-Forwarded-Proto
+│  :443 → :3000     │  sets/forwards X-Forwarded-For + X-Forwarded-Proto
 └───┬───────────────┘
     │  loopback :3000
     ▼
@@ -101,7 +107,42 @@ the decision.
   on Caddy but nothing is Caddy-specific.
 - Caddy listens on `:80` only to redirect → `:443`. Only `:443` is exposed.
 
-### 3.4 Persistent SQLite storage
+### 3.4 Domain and DNS
+
+- **Canonical hostname**: a single apex domain or `www`-subdomain, e.g.
+  `flipblog.example.com`. **Canonical redirect policy**: `http://` and the
+  non-canonical host (`https://example.com` vs `https://www.example.com`, or
+  bare apex) both redirect to the canonical `https://` URL — Caddy does this via
+  its default automatic HTTPS redirect plus an explicit `redir` for the
+  non-canonical host. Pick **one** canonical form and keep it stable; the SPA and
+  API are same-origin so no cross-host cookie/CORS concerns arise.
+- **Required DNS records and ownership**:
+
+  | Record | Type | Value | Purpose |
+  |--------|------|-------|---------|
+  | `flipblog.example.com` | A | VM public IPv4 | canonical host → host |
+  | `flipblog.example.com` | AAAA | VM public IPv6 | **optional**; see below |
+  | `flipblog.example.com` | CAA | `0 issue "letsencrypt.org"` (recommended) | authorizes Let's Encrypt issuance |
+
+  Ownership: the **operator** owns the domain registrar account and DNS; the
+  **deploy automation** only reads/writes records during cutover, and a human is
+  responsible for renewal/transfer. The VM's public IP is stable and assigned at
+  provisioning; DNS A record points at it.
+- **TTL and cutover/rollback**: use a **low TTL (300 s)** on the A/AAAA records
+  before and during a cutover so the new address is adopted quickly; raise it
+  again after the cutover is stable if you want fewer DNS queries. Rollback of a
+  cutover = repoint the A record back to the previous VM's IP and wait out the TTL
+  (the old host can be kept running during the window). Keep the previous IP
+  assigned to the old VM for at least one TTL after cutover to avoid split-brain.
+- **IPv6**: **deferred** in v1 — the VM and DNS only need IPv4 to serve. AAAA is
+  optional; if the provider supports it, publishing IPv6 improves reachability but
+  is not required for launch. Caddy handles v6 transparently if it is added later.
+- **TLS certs**: Let's Encrypt via Caddy's automatic ACME against the canonical
+  host; CAA record restricts issuance to Let's Encrypt (or the provider of your
+  choice) so a misconfigured actor can't issue for the domain. Certificate renewal
+  is automatic; monitor the expiry as part of #36.
+
+### 3.5 Persistent SQLite storage
 
 - SQLite is the persistent store: `node:sqlite`, `foreign_keys=ON`, single writer.
 - `DB_PATH` and `UPLOADS_DIR` point at a **persistent attached disk** (a data
@@ -109,7 +150,7 @@ the decision.
 - No network filesystem backs SQLite (SQLite over NFS is not supported and risks
   corruption). SQLite stays on local disk; see §6 on when to move off it.
 
-### 3.5 Offsite backup transport — independent object storage
+### 3.6 Offsite backup transport — independent object storage
 
 - Local DB backups are created at startup (one per migration) in `backups/`.
 - The offsite layer encrypts with **AES-256-GCM** and pushes to a directory
@@ -121,7 +162,7 @@ the decision.
 - The offsite key is a 32-byte value (hex or base64) stored in the secret file and
   a vault mirror. Only the `flipblog` service account can read `BACKUP_OFFSITE_DIR`.
 
-### 3.6 Secrets management
+### 3.7 Secrets management
 
 | Secret | Storage | Notes |
 |--------|---------|-------|
@@ -134,7 +175,7 @@ Systemd `EnvironmentFile` is read-only by `root`, then the unit runs as `flipblo
 so the process itself can't be tampered with by the service user. Secrets are
 **never committed** (`.env.example` carries safe dev defaults only).
 
-### 3.7 Deployment & rollback flow
+### 3.8 Deployment & rollback flow
 
 - **Artifact**: a versioned tarball / directory per release, placed under
   `/srv/flipblog/releases/<version>`, with `current` a symlink to the active one.
@@ -145,7 +186,7 @@ so the process itself can't be tampered with by the service user. Secrets are
   and `docs/release-process.md` documents triggers (>5 min unhealthy, error rate
   >5% for 5 min, critical flow broken).
 
-### 3.8 Health & monitoring
+### 3.9 Health & monitoring
 
 - **Liveness**: `GET /api/health/live` — 200, no DB touch.
 - **Readiness**: `GET /api/health/ready` — integrity + foreign keys + migration
@@ -155,7 +196,7 @@ so the process itself can't be tampered with by the service user. Secrets are
   **#36**; the deployment doc names the endpoints and who consumes them (systemd
   restart on crash, probe on restart, alerting in #36).
 
-### 3.9 Expected traffic & scaling boundary
+### 3.10 Expected traffic & scaling boundary
 
 - **Assumption**: a publishing blog — single-digit to low double-digit requests/sec,
   a handful of writers, mostly reads. The whole app + SQLite fits easily on one VM.
@@ -163,6 +204,28 @@ so the process itself can't be tampered with by the service user. Secrets are
   RTO/RPO are measured by the restore drill (`docs/backup-and-recovery.md`).
 - **Maintenance**: OS patches via the provider; app upgrades + a periodic restore
   drill.
+
+### 3.11 Cost assumptions
+
+- **Expected monthly range: $10–$20 USD total.** Breakdown:
+
+  | Item | Estimate | Notes |
+  |------|----------|-------|
+  | Small VM (2 vCPU / 4 GiB / 40 GiB) | $5–$12 | typical IaaS "small" tier; spot/5-yr reserved lowers it |
+  | Persistent disk | $1–$3 | 40–80 GiB block storage |
+  | Object storage (offsite backups) | $0.50–$2 | ~1–2 GiB stored, low transfer; writes once per cadence |
+  | Domain + DNS | $0.50–$1 | e.g. `example.com` yearly amortized; DNS free at registrar |
+  | Monitoring / uptime probe | $0 | self-hosted or free-tier probe; no SaaS required in v1 |
+
+- **Traffic/storage assumptions behind the estimate**: a low-read blog
+  (single-digit to low double-digit requests/sec), a handful of writers, small
+  uploads (≤ 5 MiB each) and a small DB (tens of MB); offsite backup set of a few
+  hundred MiB. No CDN or log-egress-heavy workload.
+- **Threshold for reassessing the architecture**: revisit this document when
+  **any** of the following holds:
+  - Monthly spend (VM+disk+egress) exceeds roughly **$50** sustained, or
+  - sustained traffic beyond ~50 req/s or multi-GiB weekly egress, or
+  - any §5 (SQLite) trigger, or a real HA/downtime requirement appears.
 
 ## 4. Trade-offs
 
