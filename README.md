@@ -209,6 +209,9 @@ The app is a single Node process. Build the front-end (`npm run build`) so `serv
 `npm start` behind any reverse proxy / static host. `DB_PATH` controls the SQLite file location; back it up like any
 database.
 
+See [`docs/deployment.md`](docs/deployment.md) for the selected production architecture (single VM + Caddy +
+systemd + SQLite on a persistent disk + object-storage offsite backups) and #34/#35/#36 for the implementation.
+
 ### Startup sequence
 
 1. The server opens `DB_PATH` (creating it and its parent directory if missing).

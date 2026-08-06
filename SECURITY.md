@@ -76,7 +76,9 @@ CSRF cookies are marked `Secure` in production, so the app must sit behind a
 TLS-terminating reverse proxy). Configure your reverse proxy to forward
 `X-Forwarded-Proto` and `X-Forwarded-For` and set `TRUST_PROXY` to the addresses
 or hop count you are willing to trust (e.g. `loopback`, a CIDR like `10.0.0.0/8`,
-a hop count like `1`, or a comma-separated list).
+a hop count like `1`, or a comma-separated list). The selected production topology
+(reverse proxy, systemd, persistent disk, secret file) is documented in
+[`docs/deployment.md`](docs/deployment.md).
 
 Required environment variables for production:
 
