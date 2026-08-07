@@ -1,0 +1,37 @@
+# FlipBlog systemd service unit (production).
+#
+# Reference for Issue #34. Place at /etc/systemd/system/flipblog.service.
+# A data-disk at /var/lib/flipblog is expected (see flipblog-data.mount and
+# docs/deployment.md). The app runs as an unprivileged service user.
+
+[Unit]
+Description=FlipBlog publishing platform
+After=network-online.target flipblog-data.mount
+Wants=network-online.target
+Requires=flipblog-data.mount
+
+[Service]
+Type=simple
+# WorkingDirectory is the built `server` package (release dir), so relative
+# paths in .env and the config resolve consistently at runtime.
+WorkingDirectory=/srv/flipblog/current
+User=flipblog
+Group=flipblog
+# Secrets and runtime config are injected from a root-owned, mode-0600 file.
+EnvironmentFile=/etc/flipblog/app.env
+ExecStart=/usr/bin/node --no-warnings src/index.js
+Restart=on-failure
+RestartSec=3
+# systemd gives the app this long to drain before SIGKILL. It MUST be larger
+# than SHUTDOWN_GRACE_MS so the app's own bounded drain runs to completion.
+TimeoutStopSec=20
+# Keep the DB and uploads on the data disk; .env already points DB_PATH and
+# UPLOADS_DIR there (see deploy/systemd/app.env.example).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/flipblog
+
+[Install]
+WantedBy=multi-user.target

@@ -279,7 +279,10 @@ This is a paper decision now; revisit when one of the triggers above is real.
 
 - **#34** Build the production runtime conforming to this doc (systemd unit,
   data-disk mount, `app.env`, node build) — including the graceful-shutdown path
-  that is currently missing (no SIGTERM/SIGINT handler in `server/src/index.js`).
+  (stop accepting connections, drain in-flight requests within
+  `SHUTDOWN_GRACE_MS`, close the SQLite database, exit 0; readiness flips to
+  `503 shutting_down` while draining). Reference artifacts live in
+  [`deploy/`](../deploy/README.md).
 - **#35** Create staging deployment and production release pipeline using the
   symlink/`current` + tag approach.
 - **#36** Add production monitoring, alerts, incidents, runbooks reading
