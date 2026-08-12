@@ -79,9 +79,18 @@ set -euo pipefail
 release_dir="$RELEASES_BASE/$VERSION"
 
 echo "extracting to $release_dir"
-sudo mkdir -p "$release_dir"
-sudo tar -xzf "$TARBALL" -C "$release_dir"
-sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$release_dir"
+sudo mkdir -p "$RELEASES_BASE"
+# Release directories are immutable: never overwrite an existing dir, because
+# every previous deploy is a potential rollback target. If the dir already
+# exists (e.g. re-deploying the same SHA, or re-promoting the same tag), skip
+# extraction and trust the existing files.
+if [ -d "$release_dir" ]; then
+  echo "release dir already present: $release_dir (skipping extraction; no rebuild)"
+else
+  sudo mkdir -p "$release_dir"
+  sudo tar -xzf "$TARBALL" -C "$release_dir"
+  sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$release_dir"
+fi
 
 if [ -n "$APP_ENV_B64" ]; then
   echo "writing /etc/flipblog/app.env"

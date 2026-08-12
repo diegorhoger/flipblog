@@ -28,29 +28,20 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.version }}
-      - name: Refuse to promote unless the tag exists and required CI is green
+      - name: Verify the tag exists and wait for required CI checks at this commit
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_SHA: ${{ github.sha }}
+          REQUIRED_CHECKS: test,e2e,release
         run: |
-          set -euo pipefail
           TAG="${{ inputs.version }}"
           if ! git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "::error::tag '$TAG' does not exist"
             exit 1
           fi
-          SHA=$(git rev-parse HEAD)
-          echo "Gating on commit $SHA (tag $TAG)"
-          for name in test e2e release; do
-            concl=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/check-runs" \
-              --jq ".check_runs | map(select(.name==\"$name\")) | sort_by(.id) | reverse | .[0] | .conclusion // \"none\"")
-            echo "  $name -> ${concl:-none}"
-            if [ "$concl" != "success" ]; then
-              echo "::error::required CI check '$name' is not green (${concl:-none}) at tag $TAG; refusing to promote"
-              exit 1
-            fi
-          done
-          echo "CI gate passed"
+          bash scripts/ci-gate.sh
 
   promote:
     name: Promote to production host
@@ -91,10 +82,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          TAG="${{ inputs.version }}"
+          VERSION="${TAG#v}"
           npm ci
-          npm run release:build -- --tag "${{ inputs.version }}"
-          RELEASE_DIR="dist/releases/$(printf '%s' '${{ inputs.version }}' | sed 's/^v//')"
-          echo "RELEASE_DIR=$RELEASE_DIR" >> "$GITHUB_ENV"
+          npm run release:build -- --tag "$TAG"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "RELEASE_DIR=dist/releases/$VERSION" >> "$GITHUB_ENV"
           cat "$RELEASE_DIR/COMMIT" "$RELEASE_DIR/VERSION"
 
       - name: Pre-deploy artifact smoke (local)
@@ -103,9 +96,7 @@ jobs:
 
       - name: Promote to production host (readiness-gated, auto-rollback)
         shell: bash
-        run: |
-          export VERSION="$(basename "$RELEASE_DIR")"
-          bash scripts/deploy.sh
+        run: bash scripts/deploy.sh
 
       - name: Post-deploy smoke (health, login, publish, reader, uploads)
         shell: bash

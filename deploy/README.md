@@ -58,12 +58,31 @@ GitHub Actions deploys every candidate. Workflows are in
 | `promote-production.yml` | manual with a `vX.Y.Z` tag | production | **required** (`production` environment reviewers) |
 | `rollback-staging.yml` / `rollback-production.yml` | manual with a release dir name | staging / production | only for production |
 
-Each deploy: CI gate (test/e2e/release green at the ref) → reproducible build →
-local artifact smoke → `scripts/deploy.sh` (readiness-gated, auto-rollback,
-migration/backup log excerpt) → `scripts/post-deploy-smoke.mjs`
-(health/login/publish/reader/uploads). Rollback is a symlink flip
-(`scripts/rollback.sh`) over release directories that remain on the host — no
-rebuild.
+Each deploy: CI gate (test/e2e/release green at the ref, polling until complete) →
+reproducible build → local artifact smoke → `scripts/deploy.sh`
+(readiness-gated, auto-rollback, migration/backup log excerpt) →
+`scripts/post-deploy-smoke.mjs` (health/login/publish/reader/uploads).
+Rollback is a symlink flip (`scripts/rollback.sh`) over release directories
+that remain on the host — no rebuild.
+
+### Concurrency & release identity
+
+- **Staging**: `cancel-in-progress: false` — deploys queue so a host update is
+  never interrupted. Each push-to-main gets its own release directory named
+  by the commit short SHA (e.g. `8ede71b5a6b7`), so previous candidates are
+  never overwritten and remain valid rollback targets. Manual re-deploy of a
+  tag uses the tag value (sans `v`) as the directory name.
+- **Production**: `cancel-in-progress: false` — promotions queue. Tag names
+  are the release directories; re-promoting the same tag skips re-extraction
+  and just flips the symlink + restarts (no rebuild).
+
+### Host retention
+
+Release directories accumulate under `/srv/flipblog/releases/`. The operator
+should periodically prune old staging directories (e.g. keep the last 10
+commits). A simple cron like `ls -dt /srv/flipblog/releases/* | tail -n +11 | xargs rm -rf`
+can be used. Production directories are kept indefinitely unless manually
+removed.
 
 ### One-time setup per environment
 
