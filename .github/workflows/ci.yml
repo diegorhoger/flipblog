@@ -64,3 +64,32 @@ jobs:
             playwright-report/
             test-results/
           retention-days: 7
+
+  # Issue #34 acceptance: "Production build is reproducible from a clean
+  # checkout". From the exact ref this job builds a self-contained versioned
+  # release directory (npm ci -> Vite build -> prod-only deps via the committed
+  # lockfile) and then boots that artifact as the systemd unit would and smokes
+  # it: liveness, readiness, SPA, and graceful SIGTERM shutdown (exit 0).
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - name: Build release artifact from this exact ref
+        run: npm run release:build
+      - name: Smoke-test the built artifact (runtime verification)
+        run: node scripts/release-smoke.mjs --release dist/releases/$(node -p "require('./package.json').version")
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flipblog-release
+          path: dist/releases/
+          retention-days: 7

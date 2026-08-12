@@ -15,7 +15,9 @@
     "start": "npm run start --workspace flipblog-server",
     "test": "npm run test --workspace flipblog-server && npm run test --workspace flipblog-web",
     "test:e2e": "npm run build && node -e \"require('fs').rmSync('server/data',{recursive:true,force:true})\" && playwright test",
-    "lint": "npm run lint --workspace flipblog-server && npm run lint --workspace flipblog-web"
+    "lint": "npm run lint --workspace flipblog-server && npm run lint --workspace flipblog-web",
+    "release:build": "node scripts/build-release.mjs",
+    "release:smoke": "node scripts/release-smoke.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.1",

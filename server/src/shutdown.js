@@ -55,13 +55,17 @@ export function createGracefulShutdown({
       };
 
       // Bound the drain. If a request never completes, the deadline force-exits
-      // so the process cannot hang forever.
+      // so the process cannot hang forever. The timer is deliberately NOT
+      // unref()'d: it is the enforcement mechanism for the bounded shutdown, so
+      // it must keep the event loop alive — even if every connection has been
+      // closed but server.close() never fires its callback, the deadline still
+      // elapses and the process exits (rather than the loop emptying and the
+      // process dropping out with an unenforced, arbitrary exit code).
       timer = setTimeout(() => {
         log.warn({ event: 'shutdown_forced', signal, graceMs }, 'shutdown grace period elapsed; forcing exit');
         exitFn(1);
         finish(1);
       }, graceMs);
-      if (typeof timer.unref === 'function') timer.unref();
 
       server.close(() => {
         log.info({ event: 'shutdown_drained', signal }, 'in-flight requests drained');

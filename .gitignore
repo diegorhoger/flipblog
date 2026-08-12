@@ -6,6 +6,9 @@ node_modules/
 # Build output (front-end is built into server/public)
 server/public/
 
+# Release build output (scripts/build-release.mjs)
+dist/
+
 # Runtime data & uploaded media
 server/data/
 server/public/uploads/
