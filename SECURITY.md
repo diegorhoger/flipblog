@@ -91,6 +91,7 @@ TRUST_PROXY=loopback            # or your proxy addresses/CIDR/hop count
 AUTH_RATE_LIMIT_MAX_FAILURES=5
 AUTH_RATE_LIMIT_WINDOW_MS=900000
 AUTH_RATE_LIMIT_MAX_ENTRIES=10000
+SHUTDOWN_GRACE_MS=10000         # graceful drain window; systemd TimeoutStopSec must be larger
 ```
 
 ### Offsite backups

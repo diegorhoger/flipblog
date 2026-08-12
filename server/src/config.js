@@ -183,6 +183,10 @@ export function resolveConfig(env = process.env) {
     authRateLimitMaxFailures: validatePositiveInt('AUTH_RATE_LIMIT_MAX_FAILURES', env.AUTH_RATE_LIMIT_MAX_FAILURES, 5, { min: 1, max: 100 }),
     authRateLimitWindowMs: validatePositiveInt('AUTH_RATE_LIMIT_WINDOW_MS', env.AUTH_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000, { min: 1000, max: 86_400_000 }),
     authRateLimitMaxEntries: validatePositiveInt('AUTH_RATE_LIMIT_MAX_ENTRIES', env.AUTH_RATE_LIMIT_MAX_ENTRIES, 10000, { min: 100, max: 100_000 }),
+    // Bounded graceful-shutdown window. In production, systemd's
+    // TimeoutStopSec must exceed this so systemd waits for the app to drain
+    // rather than SIGKILLing it mid-shutdown.
+    shutdownGraceMs: validatePositiveInt('SHUTDOWN_GRACE_MS', env.SHUTDOWN_GRACE_MS, 10_000, { min: 1000, max: 300_000 }),
   };
 }
 

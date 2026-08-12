@@ -1,0 +1,27 @@
+# FlipBlog Caddy configuration (production).
+#
+# Reference for Issue #34. Replace flipblog.example.com with the canonical
+# hostname chosen in docs/deployment.md §3.4. Caddy terminates TLS (Let's
+# Encrypt via the CAA-authorized CA) and reverse-proxies to the app on loopback.
+# It forwards X-Forwarded-For / X-Forwarded-Proto, matching TRUST_PROXY=1 in the
+# app env. Caddy auto-issues HTTP 301 from :80 to :443 and http->https.
+
+flipblog.example.com {
+	# Redirect the alternate www/apex form to the canonical host.
+	# Uncomment if you own both forms:
+	# redir www.flipblog.example.com https://flipblog.example.com{uri} permanent
+
+	encode zstd gzip
+
+	# The app serves the SPA, /api/*, and /uploads/* on one origin.
+	reverse_proxy 127.0.0.1:3000 {
+		# Pass the real client IP and the scheme the client used. Caddy sets
+		# these by default; keep them explicit so TRUST_PROXY=1 is exact.
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-For {remote_host}
+		# Health probes return as soon as the upstream answers.
+		health_uri /api/health/ready
+		health_interval 10s
+		health_timeout 2s
+	}
+}

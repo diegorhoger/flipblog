@@ -177,8 +177,20 @@ so the process itself can't be tampered with by the service user. Secrets are
 
 ### 3.8 Deployment & rollback flow
 
-- **Artifact**: a versioned tarball / directory per release, placed under
+- **Artifact**: a versioned release directory per release, placed under
   `/srv/flipblog/releases/<version>`, with `current` a symlink to the active one.
+- **Reproducible build (Issue #34 acceptance)**: the release directory is built
+  from the exact ref/tag being released by
+  [`scripts/build-release.mjs`](../scripts/build-release.mjs)
+  (`npm run release:build`): the script requires a clean checkout of the tag,
+  runs `npm ci` against the committed `package-lock.json` (never a floating
+  install), builds the front-end with Vite into `server/public`, and stages a
+  self-contained directory that is the built `server` package (src/, scripts/,
+  compiled `public/`, production-only `node_modules/`, plus `VERSION`/`COMMIT`
+  provenance). The same script runs in CI as the `release` job, which smoke-tests
+  the artifact (liveness, readiness, SPA, graceful SIGTERM shutdown → exit 0)
+  and uploads it — so CI green guarantees the exact ref builds and boots. Full
+  walk-through in [`deploy/README.md`](../deploy/README.md).
 - **Activate**: point `current` → new release, `systemctl restart flipblog`.
 - **Gate**: wait on `GET /api/health/ready` to return `200`.
 - **Rollback**: point `current` back to the previous release and restart; the
@@ -279,7 +291,10 @@ This is a paper decision now; revisit when one of the triggers above is real.
 
 - **#34** Build the production runtime conforming to this doc (systemd unit,
   data-disk mount, `app.env`, node build) — including the graceful-shutdown path
-  that is currently missing (no SIGTERM/SIGINT handler in `server/src/index.js`).
+  (stop accepting connections, drain in-flight requests within
+  `SHUTDOWN_GRACE_MS`, close the SQLite database, exit 0; readiness flips to
+  `503 shutting_down` while draining). Reference artifacts live in
+  [`deploy/`](../deploy/README.md).
 - **#35** Create staging deployment and production release pipeline using the
   symlink/`current` + tag approach.
 - **#36** Add production monitoring, alerts, incidents, runbooks reading

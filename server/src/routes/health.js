@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { getDb } from '../db.js';
 import { checkDatabaseHealth } from '../db-health.js';
+import { isShuttingDown } from '../shutdown.js';
 
 // Liveness: the process is up and able to handle requests. Deliberately does
 // NOT touch the database — a wedged DB should not flip the liveness bit that
@@ -40,8 +41,13 @@ export function evaluateReadiness(db) {
 // fully migrated to the version this build expects, and passes integrity /
 // foreign-key checks. No filesystem paths or SQL are ever returned — only a
 // coarse status and the migration counts needed by an operator to diagnose.
-function readyHandler(getDbFn) {
+function readyHandler(getDbFn, isShuttingDownFn) {
   return (_req, res) => {
+    // Once a shutdown signal has been received the service is draining: report
+    // not-ready so a reverse proxy / orchestrator stops routing traffic to it.
+    if (isShuttingDownFn()) {
+      return res.status(503).json({ status: 'unavailable', reason: 'shutting_down' });
+    }
     try {
       const result = evaluateReadiness(getDbFn());
       if (result.status !== 'ok') {
@@ -54,11 +60,11 @@ function readyHandler(getDbFn) {
   };
 }
 
-export function createHealthRouter({ getDb: getDbFn = getDb } = {}) {
+export function createHealthRouter({ getDb: getDbFn = getDb, isShuttingDown: isShuttingDownFn = isShuttingDown } = {}) {
   const router = Router();
   router.get('/', liveHandler);
   router.get('/live', liveHandler);
-  router.get('/ready', readyHandler(getDbFn));
+  router.get('/ready', readyHandler(getDbFn, isShuttingDownFn));
   return router;
 }
 
