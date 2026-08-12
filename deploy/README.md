@@ -1,7 +1,8 @@
 # FlipBlog production deploy assets
 
 Reference artifacts for the architecture selected in
-[`docs/deployment.md`](../docs/deployment.md) and implemented under Issue #34.
+[`docs/deployment.md`](../docs/deployment.md) and implemented under Issue #34
+(runtime + reproducible build) and Issue #35 (staging + release pipeline).
 
 ## Layout
 
@@ -12,6 +13,9 @@ Reference artifacts for the architecture selected in
 | `caddy/Caddyfile` | Caddy reverse proxy: TLS termination + auto certs, forwards `X-Forwarded-*` matching `TRUST_PROXY=1`, readiness health check. |
 | `../scripts/build-release.mjs` | reproducible release build (`npm run release:build`): pinned ref → `npm ci` → Vite build → self-contained versioned release directory. |
 | `../scripts/release-smoke.mjs` | boots the built artifact like systemd and verifies liveness, readiness, SPA, and graceful SIGTERM shutdown (`npm run release:smoke`). |
+| `../scripts/deploy.sh` | SSH installer used by the pipeline: upload, env write, symlink flip, readiness gate, migration/backup log excerpt, auto-rollback. |
+| `../scripts/rollback.sh` | restore a previously-installed release on the host (symlink flip; no rebuild). |
+| `../scripts/post-deploy-smoke.mjs` | live-environment smoke: health, login, upload, publish, anonymous read. |
 
 ## Build a release (reproducible, Issue #34)
 
@@ -38,9 +42,54 @@ The same job runs automatically on every PR as the CI `release` job, which
 uploads the built `dist/releases/` artifact — CI green is the gate that the
 exact ref builds and boots.
 
-To deploy: `scp`/rsync the directory to the host under
+To deploy: the CI pipeline does it for you — see **Pipeline (Issue #35)** below.
+Manually, `scp`/rsync the directory to the host under
 `/srv/flipblog/releases/<version>`, repoint the `current` symlink, and restart
 (§3.8 of `docs/deployment.md`).
+
+## Pipeline (Issue #35)
+
+GitHub Actions deploys every candidate. Workflows are in
+`.github/workflows/`:
+
+| Workflow | When | Where | Approval |
+|----------|------|-------|----------|
+| `deploy-staging.yml` | every `main` push, or manual with a version/tag | staging | none |
+| `promote-production.yml` | manual with a `vX.Y.Z` tag | production | **required** (`production` environment reviewers) |
+| `rollback-staging.yml` / `rollback-production.yml` | manual with a release dir name | staging / production | only for production |
+
+Each deploy: CI gate (test/e2e/release green at the ref) → reproducible build →
+local artifact smoke → `scripts/deploy.sh` (readiness-gated, auto-rollback,
+migration/backup log excerpt) → `scripts/post-deploy-smoke.mjs`
+(health/login/publish/reader/uploads). Rollback is a symlink flip
+(`scripts/rollback.sh`) over release directories that remain on the host — no
+rebuild.
+
+### One-time setup per environment
+
+1. **Host**: install the unit + data-disk mount as in the Install section, with
+   separate hosts/domains for staging and production.
+2. **Deploy user**: create an SSH key pair for the pipeline runner, install the
+   public key in `~deploy/.ssh/authorized_keys`, and grant passwordless sudo for
+   exactly what the scripts need:
+   ```
+   deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart flipblog, /usr/bin/systemctl stop flipblog, /usr/bin/tee /etc/flipblog/app.env, /usr/bin/chown, /usr/bin/chmod
+   ```
+3. **GitHub environments**: create `staging` and `production`. On `production`,
+   enable **Required reviewers** — that is the explicit-approval gate for
+   promotion and production rollback.
+4. **Secrets/variables** (per environment, named `STAGING_*` / `PROD_*`):
+
+   | Name | Kind | Contents |
+   |------|------|----------|
+   | `<ENV>_SSH_HOST` / `<ENV>_SSH_USER` | Secret | host + deploy user |
+   | `<ENV>_SSH_KEY` | Secret | private key (OpenSSH, PEM) |
+   | `<ENV>_APP_ENV` | Secret | the full `/etc/flipblog/app.env` text (all secrets; written to the host 0600) |
+   | `<ENV>_ADMIN_USER` / `<ENV>_ADMIN_PASSWORD` | Secret | the seeded admin login (used by the post-deploy smoke) |
+   | `<ENV>_BASE_URL` | Variable | public base URL for the post-deploy smoke, e.g. `https://staging.example.com` |
+
+5. Configure the `Caddyfile` hostname per environment (staging domain vs
+   production domain).
 
 ## Install (Debian/Ubuntu, as root)
 

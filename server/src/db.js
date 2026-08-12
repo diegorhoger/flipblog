@@ -5,6 +5,7 @@ import { config, isMemoryDb } from './config.js';
 import { runMigrations, inspectMigrationState } from './migrations/index.js';
 import { backupDatabase, defaultBackupDir } from './db-backup.js';
 import { checkDatabaseHealth } from './db-health.js';
+import { logger } from './logging.js';
 
 // Minimal baseline schema. All later structure (role, avatar, author_id,
 // category/tags/page_count, comments, indexes) is applied by ordered, versioned
@@ -111,6 +112,19 @@ export function getDb() {
   }
 
   runMigrations(db);
+
+  // Deployment-observability line: a deploy/operator tailing startup logs can
+  // confirm what this process changed. Silent only under test runs, where every
+  // throwaway database would otherwise emit a line per test.
+  // `pending` is state.missing: the array of pending version numbers.
+  if (pending.length > 0 && process.env.NODE_ENV !== 'test') {
+    logger.info({
+      event: 'db_migrations_applied',
+      count: pending.length,
+      versions: pending,
+      preVersion: state.applied.length ? Math.max(...state.applied) : 0,
+    });
+  }
 
   // Fail closed on a broken database. A half-applied migration already throws
   // inside runMigrations; this guards the other failure modes — a corrupt page,

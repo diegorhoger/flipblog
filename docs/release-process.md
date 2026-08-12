@@ -74,10 +74,16 @@ git push origin v1.2.0-rc.1
 ```
 
 ### 3. RC Verification
-- CI runs on PRs to `main`; tag-triggered CI is not yet configured
-- Deploy RC to staging environment (manual step)
-- Run full verification checklist (see RELEASE_CHECKLIST.md)
-- Fix any issues on release branch, create new RC if needed
+- CI runs on PRs to `main` and every push to `main` (test, e2e, and the
+  reproducible-build `release` job from #34).
+- Deploying the RC to staging is **automatic**: every push to `main` triggers
+  [`deploy-staging.yml`](../.github/workflows/deploy-staging.yml), which gates on
+  green CI, builds the exact ref, deploys to the production-like staging host,
+  gates on readiness, and runs the post-deploy smoke. A specific RC tag
+  (`workflow_dispatch` → Deploy to staging → version `v1.2.0-rc.1`) can be
+  deployed the same way.
+- Run the full verification checklist (see RELEASE_CHECKLIST.md).
+- Fix any issues on release branch, create new RC if needed.
 
 ### 4. Production Release
 ```bash
@@ -86,8 +92,16 @@ git tag -a v1.2.0 -m "Release v1.2.0"
 git push origin v1.2.0
 ```
 
-- Deploy the tag or release-branch artifact to production (manual step; no CI/CD pipeline exists yet)
-- Run post-deployment verification
+- **Promote via the pipeline**: run
+  [`promote-production.yml`](../.github/workflows/promote-production.yml)
+  (`workflow_dispatch`) with version `v1.2.0`. It gates on green CI at the tag,
+  builds the exact tag, and deploys to production **only after explicit
+  approval** — the job targets the `production` GitHub environment, which must
+  have "Required reviewers" enabled so a human signs off before any step runs.
+  The `current` symlink switch keeps the previous release installed for
+  one-command rollback.
+- Run post-deployment verification (the pipeline's smoke covers health, login,
+  publish, reader, and uploads).
 - Merge release branch back to main
 - Delete release branch (optional)
 
@@ -96,14 +110,51 @@ git push origin v1.2.0
 All PRs to `main` and release branches must pass:
 1. **test** — Unit, integration, and web tests
 2. **e2e** — Playwright end-to-end tests
+3. **release** — reproducible build from the exact ref + artifact smoke (Issue #34)
+
+The deploy pipelines re-verify at the commit/tag they deploy: deployment is refused
+unless each of these checks is green (`.github/workflows/deploy-staging.yml`,
+`.github/workflows/promote-production.yml`).
 
 Branch protection enforces:
-- Strict status checks (both must pass)
+- Strict status checks (all three must pass)
 - 1 approving review
 - Dismiss stale reviews on new commits
 - Require last push approval
 - Conversation resolution
 - Admin enforcement
+
+## Continuous Delivery Pipeline (Issue #35)
+
+| Workflow | Triggers | Destination | Approval |
+|----------|----------|-------------|----------|
+| `.github/workflows/deploy-staging.yml` | push to `main`, or `workflow_dispatch` with a version/tag | staging host | none (`staging` environment) |
+| `.github/workflows/promote-production.yml` | `workflow_dispatch` with a `vX.Y.Z` tag | production host | **required** — `production` environment with "Required reviewers" |
+| `.github/workflows/rollback-staging.yml` | `workflow_dispatch` with a release dir name | staging host | none |
+| `.github/workflows/rollback-production.yml` | `workflow_dispatch` with a release dir name | production host | **required** |
+
+Every deploy:
+1. **Gates on required CI**: refuses the commit/tag unless `test`, `e2e` and
+   `release` check-runs are green.
+2. **Builds reproducibly**: `npm ci` → `npm run release:build` at the exact
+   ref/tag (`scripts/build-release.mjs`, Issue #34).
+3. **Local artifact smoke**: `scripts/release-smoke.mjs` (liveness, readiness,
+   SPA, graceful SIGTERM exit 0).
+4. **Installs via `scripts/deploy.sh`** over SSH: uploads the release dir,
+   writes `/etc/flipblog/app.env` (from environment secrets), flips the
+   `current` symlink, restarts the unit, and **gates on readiness** (200 within
+   90 s), printing the app's migration/backup startup log lines.
+5. **Auto-rolls back** on readiness failure by restoring the previous `current`
+   symlink (an existing release dir, so **no rebuild**).
+6. **Post-deploy smoke** (`scripts/post-deploy-smoke.mjs`): health, admin login,
+   upload, publish, and anonymous read.
+
+**Rollback (without rebuilding):** run the environment's `rollback-*.yml`
+workflow with the release directory name to restore (it must already exist under
+`/srv/flipblog/releases/`). `scripts/rollback.sh` flips the symlink, restarts,
+re-checks readiness, and restores the prior version if the target fails.
+Release directories are retained on the host after each deploy precisely so the
+previous known-good version is always one flip away.
 
 ## Database Migrations
 
@@ -165,9 +216,12 @@ git switch -c hotfix/v1.2.1 v1.2.0
 git add .
 git commit -m "fix: critical production issue"
 
-# Tag (deployment is manual — no CI/CD pipeline exists yet)
+# Tag (deployment via the pipeline, see below)
 git tag -a v1.2.1 -m "Hotfix v1.2.1"
 git push origin v1.2.1
+
+# Promote: run promote-production.yml with version v1.2.1, approve the
+# production environment gate, post-deploy smoke runs automatically.
 
 # Merge to main via PR (main is branch-protected, no direct pushes)
 git push origin hotfix/v1.2.1
@@ -208,5 +262,5 @@ git tag -d v1.2.0  # if not pushed
 
 ---
 
-*Last updated: 2026-07-29*
-*Version: 1.0*
+*Last updated: 2026-08-12*
+*Version: 1.1 — Issue #35: staging + production CD pipeline*

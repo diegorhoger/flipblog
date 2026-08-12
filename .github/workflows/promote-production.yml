@@ -1,0 +1,116 @@
+name: Promote to production
+# Issue #35: a verified version is promoted from the release pipeline to
+# production. Triggered manually (workflow_dispatch) and gated by the
+# `production` GitHub environment: enable "Required reviewers" on it so
+# promotion waits for explicit human approval before any deploy step runs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Production release tag to promote, e.g. v1.2.0 (must exist and have green CI).'
+        required: true
+
+# Do not cancel an in-flight production deploy; queue a second promotion behind
+# it so two deploys can never race over `current` and systemd.
+concurrency:
+  group: deploy-production-env
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Gate on required CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version }}
+      - name: Refuse to promote unless the tag exists and required CI is green
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.version }}"
+          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "::error::tag '$TAG' does not exist"
+            exit 1
+          fi
+          SHA=$(git rev-parse HEAD)
+          echo "Gating on commit $SHA (tag $TAG)"
+          for name in test e2e release; do
+            concl=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/check-runs" \
+              --jq ".check_runs | map(select(.name==\"$name\")) | sort_by(.id) | reverse | .[0] | .conclusion // \"none\"")
+            echo "  $name -> ${concl:-none}"
+            if [ "$concl" != "success" ]; then
+              echo "::error::required CI check '$name' is not green (${concl:-none}) at tag $TAG; refusing to promote"
+              exit 1
+            fi
+          done
+          echo "CI gate passed"
+
+  promote:
+    name: Promote to production host
+    needs: gate
+    runs-on: ubuntu-latest
+    # EXPLICIT APPROVAL GATE: this environment must have "Required reviewers"
+    # configured, so the job waits for approval before running. The release
+    # version came in via workflow_dispatch and passed the CI gate above.
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      APP_ENV_CONTENT: ${{ secrets.PROD_APP_ENV }}
+      PROD_BASE_URL: ${{ vars.PROD_BASE_URL }}
+      SMOKE_ADMIN_USER: ${{ secrets.PROD_ADMIN_USER }}
+      SMOKE_ADMIN_PASSWORD: ${{ secrets.PROD_ADMIN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Write SSH key
+        shell: bash
+        env:
+          KEY: ${{ secrets.PROD_SSH_KEY }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          echo "SSH_KEY_PATH=$HOME/.ssh/id_ed25519" >> "$GITHUB_ENV"
+
+      - name: Build the exact tag and record its provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run release:build -- --tag "${{ inputs.version }}"
+          RELEASE_DIR="dist/releases/$(printf '%s' '${{ inputs.version }}' | sed 's/^v//')"
+          echo "RELEASE_DIR=$RELEASE_DIR" >> "$GITHUB_ENV"
+          cat "$RELEASE_DIR/COMMIT" "$RELEASE_DIR/VERSION"
+
+      - name: Pre-deploy artifact smoke (local)
+        shell: bash
+        run: node scripts/release-smoke.mjs --release "$RELEASE_DIR"
+
+      - name: Promote to production host (readiness-gated, auto-rollback)
+        shell: bash
+        run: |
+          export VERSION="$(basename "$RELEASE_DIR")"
+          bash scripts/deploy.sh
+
+      - name: Post-deploy smoke (health, login, publish, reader, uploads)
+        shell: bash
+        run: |
+          node scripts/post-deploy-smoke.mjs \
+            --base-url "$PROD_BASE_URL" \
+            --username "$SMOKE_ADMIN_USER" \
+            --password "$SMOKE_ADMIN_PASSWORD"
