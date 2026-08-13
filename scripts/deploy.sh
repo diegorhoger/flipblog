@@ -10,7 +10,10 @@
 #   3. switches current -> <VERSION>, restarts the unit
 #   4. gates on readiness (READY_URL == 200 up to 90s)
 #   5. on failure, restores the previous `current` symlink and restarts
-#      (rollback uses a release dir that is already on the host — no rebuild)
+#      (rollback uses a release dir that is already on the host — no rebuild),
+#      after a migration-aware DB gate: if the failed release migrated the DB
+#      forward, the newest compatible pre-migration backup is restored first so
+#      the older build can boot (server/scripts/db-rollback-check.mjs)
 #   6. prints the app's migration/backup startup log lines
 #
 # Requires on the host: the `deploy` user's SSH key, passwordless sudo for
@@ -42,6 +45,7 @@ CURRENT_LINK="${CURRENT_LINK:-$BASE_DIR/current}"
 SERVICE_USER="${SERVICE_USER:-flipblog}"
 READY_URL="${READY_URL:-http://127.0.0.1:3000/api/health/ready}"
 REMOTE_TARBALL="/tmp/flipblog-release-${VERSION}-$$.tar.gz"
+REMOTE_TOOL="/tmp/flipblog-db-rollback-check.mjs"
 
 if [ -n "${APP_ENV_B64+x}" ] && [ -n "$APP_ENV_B64" ]; then
   : # already base64
@@ -66,6 +70,11 @@ echo "packaging $RELEASE_DIR"
 tar -C "$RELEASE_DIR" -czf "$WORK/release.tar.gz" .
 echo "uploading tarball to $SSH_USER@$SSH_HOST"
 scp "${SSH_OPTS[@]}" -q "$WORK/release.tar.gz" "$SSH_USER@$SSH_HOST:$REMOTE_TARBALL"
+# The migration-aware rollback gate is needed on the host whenever a deploy
+# fails readiness and we flip back to an older release (the older build may not
+# be able to open a DB the failed release already migrated). Fixed host path so
+# the documented sudoers entry can scope it exactly.
+scp "${SSH_OPTS[@]}" -q "server/scripts/db-rollback-check.mjs" "$SSH_USER@$SSH_HOST:$REMOTE_TOOL"
 
 # Escape each value for embedding into the remote shell command line.
 emit() { printf '%q' "$1"; }
@@ -73,7 +82,7 @@ emit() { printf '%q' "$1"; }
 # --- 2. remote install + gate + rollback ---------------------------------------
 echo "remote install: VERSION=$VERSION -> $RELEASES_BASE/$VERSION"
 ssh "${SSH_OPTS[@]}" "$SSH_USER@$SSH_HOST" \
-  "export VERSION=$(emit "$VERSION") RELEASES_BASE=$(emit "$RELEASES_BASE") CURRENT_LINK=$(emit "$CURRENT_LINK") APP_ENV_B64=$(emit "$APP_ENV_B64") SERVICE_USER=$(emit "$SERVICE_USER") READY_URL=$(emit "$READY_URL") TARBALL=$(emit "$REMOTE_TARBALL"); bash -s" <<'REMOTE'
+  "export VERSION=$(emit "$VERSION") RELEASES_BASE=$(emit "$RELEASES_BASE") CURRENT_LINK=$(emit "$CURRENT_LINK") APP_ENV_B64=$(emit "$APP_ENV_B64") SERVICE_USER=$(emit "$SERVICE_USER") READY_URL=$(emit "$READY_URL") TARBALL=$(emit "$REMOTE_TARBALL") DB_ROLLBACK_TOOL=$(emit "$REMOTE_TOOL"); bash -s" <<'REMOTE'
 set -euo pipefail
 
 release_dir="$RELEASES_BASE/$VERSION"
@@ -99,6 +108,38 @@ if [ -n "$APP_ENV_B64" ]; then
   sudo chmod 0600 /etc/flipblog/app.env
 fi
 
+# --- Migration-aware rollback gate -------------------------------------------
+# Fuzzy source of truth for the live DB: the app reads DB_PATH/DB_BACKUP_DIR from
+# /etc/flipblog/app.env (config.js). If the app.env is never written (optional
+# APP_ENV_CONTENT) there is nothing to protect and the gate self-skips.
+DB_PATH="$(sed -n 's/^DB_PATH=//p' /etc/flipblog/app.env 2>/dev/null | tail -n 1)"
+DB_BACKUP_DIR="$(sed -n 's/^DB_BACKUP_DIR=//p' /etc/flipblog/app.env 2>/dev/null | tail -n 1)"
+
+# db_gate <targetReleaseDir>  -- before flipping `current` to an OLDER release,
+# make sure that release can open the live DB. If the DB has migration versions
+# the target build does not know, the tool restores the newest compatible
+# pre-migration backup (flipblog-pre-v*.db). Exit 0 = safe/restored; non-zero
+# (incl. 2 = restore needed but no compatible backup) = do NOT flip.
+db_gate() {
+  local target="$1"
+  if [ -z "$DB_PATH" ] || [ "$DB_PATH" = ":memory:" ]; then
+    echo "db-gate: no persistent DB_PATH configured; skipping DB safety check"
+    return 0
+  fi
+  local args=(--release "$target" --db-path "$DB_PATH" --apply)
+  [ -n "$DB_BACKUP_DIR" ] && args+=(--backup-dir "$DB_BACKUP_DIR")
+  echo "db-gate: ensuring $target can open the live DB ($DB_PATH)"
+  if sudo node "$DB_ROLLBACK_TOOL" "${args[@]}"; then
+    # The tool restores by copy+rename as root; hand the file back to the unit user.
+    sudo chown "$SERVICE_USER:$SERVICE_USER" "$DB_PATH" 2>/dev/null || true
+    return 0
+  fi
+  echo "db-gate: REFUSING to flip to $target — the DB is newer than that release and no"
+  echo "db-gate: compatible pre-migration backup exists. Restore one from the offsite"
+  echo "db-gate: backups first, then re-run the rollback." >&2
+  return 1
+}
+
 PREV_NAME=""
 if [ -L "$CURRENT_LINK" ]; then
   PREV_NAME="$(basename "$(readlink "$CURRENT_LINK" || true)")"
@@ -119,9 +160,19 @@ if [ "$ready" != 1 ]; then
   echo "READINESS FAILED for $VERSION"
   if [ -n "$PREV_NAME" ] && [ -d "$RELEASES_BASE/$PREV_NAME" ]; then
     echo "rolling back to $PREV_NAME (existing release dir; no rebuild)"
-    sudo ln -sfn "$RELEASES_BASE/$PREV_NAME" "$CURRENT_LINK"
-    sudo chown -h "$SERVICE_USER:$SERVICE_USER" "$CURRENT_LINK"
-    sudo systemctl restart flipblog
+    # Stop the unit first: the DB gate below may replace the live database and
+    # must never do so while a flipblog process holds the file open.
+    sudo systemctl stop flipblog || true
+    # DB gate: only flip back if the previous release can open the live DB
+    # (a failed release may have migrated it forward already).
+    if db_gate "$RELEASES_BASE/$PREV_NAME"; then
+      sudo ln -sfn "$RELEASES_BASE/$PREV_NAME" "$CURRENT_LINK"
+      sudo chown -h "$SERVICE_USER:$SERVICE_USER" "$CURRENT_LINK"
+      sudo systemctl start flipblog
+    else
+      echo "db-gate: rollback to $PREV_NAME aborted; restoring the pre-rollback service state" >&2
+      sudo systemctl start flipblog
+    fi
   else
     echo "no previous release to roll back to; leaving current as-is"
   fi
