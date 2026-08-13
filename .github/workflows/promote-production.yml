@@ -19,6 +19,7 @@ concurrency:
 
 permissions:
   contents: read
+  checks: read
 
 jobs:
   gate:
@@ -34,16 +35,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           REQUIRED_CHECKS: test,e2e,release
+          DEPLOY_VERSION: ${{ inputs.version }}
         run: |
-          TAG="${{ inputs.version }}"
-          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "::error::tag '$TAG' does not exist"
+          if ! git rev-parse "$DEPLOY_VERSION" >/dev/null 2>&1; then
+            echo "::error::tag '$DEPLOY_VERSION' does not exist"
             exit 1
           fi
           # Derive the SHA from the checkout (not ${github.sha}, which on
           # workflow_dispatch points at the default-branch head, not the tag
           # commit we actually checked out and will build/deploy).
-          CI_SHA="$(git rev-parse HEAD)"
+          export CI_SHA="$(git rev-parse HEAD)"
           bash scripts/ci-gate.sh
 
   promote:
@@ -83,9 +84,11 @@ jobs:
 
       - name: Build the exact tag and record its provenance
         shell: bash
+        env:
+          DEPLOY_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          TAG="${{ inputs.version }}"
+          TAG="$DEPLOY_VERSION"
           VERSION="${TAG#v}"
           npm ci
           npm run release:build -- --tag "$TAG"

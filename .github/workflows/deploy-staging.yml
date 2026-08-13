@@ -21,6 +21,7 @@ concurrency:
 
 permissions:
   contents: read
+  checks: read
 
 jobs:
   gate:
@@ -36,11 +37,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           REQUIRED_CHECKS: test,e2e,release
+          DEPLOY_VERSION: ${{ inputs.version }}
         run: |
           # Derive the SHA from the checkout (not ${github.sha}, which on
           # workflow_dispatch with a ref points at the default-branch head,
           # not the ref we actually checked out and will build/deploy).
-          CI_SHA="$(git rev-parse HEAD)"
+          export CI_SHA="$(git rev-parse HEAD)"
           bash scripts/ci-gate.sh
 
   deploy:
@@ -80,11 +82,13 @@ jobs:
       # so the previous staging build remains a valid rollback target.
       - name: Build release artifact
         shell: bash
+        env:
+          DEPLOY_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           npm ci
-          if [ -n "${{ inputs.version }}" ]; then
-            TAG="${{ inputs.version }}"
+          if [ -n "$DEPLOY_VERSION" ]; then
+            TAG="$DEPLOY_VERSION"
             npm run release:build -- --tag "$TAG"
             VERSION="${TAG#v}"
           else
