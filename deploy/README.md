@@ -13,8 +13,9 @@ Reference artifacts for the architecture selected in
 | `caddy/Caddyfile` | Caddy reverse proxy: TLS termination + auto certs, forwards `X-Forwarded-*` matching `TRUST_PROXY=1`, readiness health check. |
 | `../scripts/build-release.mjs` | reproducible release build (`npm run release:build`): pinned ref → `npm ci` → Vite build → self-contained versioned release directory. |
 | `../scripts/release-smoke.mjs` | boots the built artifact like systemd and verifies liveness, readiness, SPA, and graceful SIGTERM shutdown (`npm run release:smoke`). |
-| `../scripts/deploy.sh` | SSH installer used by the pipeline: upload, env write, symlink flip, readiness gate, migration/backup log excerpt, auto-rollback. |
-| `../scripts/rollback.sh` | restore a previously-installed release on the host (symlink flip; no rebuild). |
+| `../scripts/deploy.sh` | SSH installer used by the pipeline: upload, env write, symlink flip, readiness gate, migration/backup log excerpt, auto-rollback. Rollback is migration-aware (see `db-rollback-check.mjs`). |
+| `../scripts/rollback.sh` | restore a previously-installed release on the host (symlink flip; no rebuild). Also migration-aware. |
+| `../server/scripts/db-rollback-check.mjs` | DB safety gate run on the host before flipping `current` to an older release. If the release being replaced migrated the DB forward, the newest compatible `flipblog-pre-v*.db` backup is restored so the older build can boot; the flip is refused when no compatible backup exists. Self-contained (no repo imports), so it can be `scp`'d to the host and run from `/tmp`. |
 | `../scripts/post-deploy-smoke.mjs` | live-environment smoke: health, login, upload, publish, anonymous read. |
 
 ## Build a release (reproducible, Issue #34)
@@ -63,7 +64,10 @@ reproducible build → local artifact smoke → `scripts/deploy.sh`
 (readiness-gated, auto-rollback, migration/backup log excerpt) →
 `scripts/post-deploy-smoke.mjs` (health/login/publish/reader/uploads).
 Rollback is a symlink flip (`scripts/rollback.sh`) over release directories
-that remain on the host — no rebuild.
+that remain on the host — no rebuild. If the release being replaced migrated
+the DB forward, the DB gate restores the newest compatible `flipblog-pre-v*.db`
+backup before the flip so the older build can boot; without a compatible backup
+the rollback is refused (restore from the offsite backups first).
 
 ### Concurrency & release identity
 
@@ -90,10 +94,32 @@ removed.
    separate hosts/domains for staging and production.
 2. **Deploy user**: create an SSH key pair for the pipeline runner, install the
    public key in `~deploy/.ssh/authorized_keys`, and grant passwordless sudo for
-   exactly what the scripts need:
+   exactly what the scripts need. Install it as a sudoers drop-in file
+   (`/etc/sudoers.d/flipblog-deploy`, mode `0440`), replacing the values in the
+   snippet below with the host's actual absolute paths from `command -v
+   systemctl` and `command -v node`:
    ```
-   deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart flipblog, /usr/bin/systemctl stop flipblog, /usr/bin/tee /etc/flipblog/app.env, /usr/bin/chown, /usr/bin/chmod
+   # /etc/sudoers.d/flipblog-deploy
+   deploy ALL=(root) NOPASSWD: \
+     /usr/bin/systemctl start flipblog, \
+     /usr/bin/systemctl stop flipblog, \
+     /usr/bin/systemctl restart flipblog, \
+     /usr/bin/node /tmp/flipblog-db-rollback-check.mjs, \
+     /usr/bin/tee /etc/flipblog/app.env, \
+     /usr/bin/chown, \
+     /usr/bin/chmod
    ```
+   If that file already exists from an earlier setup, **replace its contents
+   rather than appending to the old single-line rule** (a rule in an earlier
+   line wins in sudoers, so a stale `systemctl restart`-only line would shadow
+   this one and break `systemctl start` on rollback).
+   The `/usr/bin/node /tmp/flipblog-db-rollback-check.mjs` entry is what lets the
+   pipeline run the migration-aware DB gate under root; the tool is uploaded to
+   exactly that fixed path by both `deploy.sh` and `rollback.sh` (the scripts
+   `scp` it from this repo). After a restore it hands ownership back via the
+   already-allowed `chown`. The `start`/`stop`/`restart` entries are all needed:
+   the rollback path stops the unit **before** restoring a database backup and
+   starts it again afterwards (see the section below).
 3. **GitHub environments**: create `staging` and `production`. On `production`,
    enable **Required reviewers** — that is the explicit-approval gate for
    promotion and production rollback.
@@ -109,6 +135,62 @@ removed.
 
 5. Configure the `Caddyfile` hostname per environment (staging domain vs
    production domain).
+
+### Host prerequisite update for migration-aware rollback
+
+The `db-rollback-check.mjs` gate and the stop-before-restore rollback path are
+**only operational once this host-side change is applied**. This is a required
+prerequisite, not optional documentation: until it is in place, an automatic
+deploy rollback or a manual `rollback.sh` that hits an already-migrated database
+fails with a permission error exactly when someone is having a bad day. Apply it
+on **every** staging and production host before the new rollback workflow is
+treated as operational.
+
+Replace the previous sudoers line for the deploy user with a drop-in file.
+Use the host's actual absolute paths — resolve them first, because sudoers does
+not expand `$PATH` and turns a path mismatch into an opaque permission error:
+
+```bash
+SYSTEMCTL="$(command -v systemctl)"
+NODE="$(command -v node)"
+# sanity-check both are absolute and non-empty before writing the file
+printf 'systemctl: %s\nnode: %s\n' "$SYSTEMCTL" "$NODE"
+```
+
+Then create the file (adjusting the paths if they differ):
+
+```bash
+sudo tee /etc/sudoers.d/flipblog-deploy >/dev/null <<EOF
+# /etc/sudoers.d/flipblog-deploy
+deploy ALL=(root) NOPASSWD: \\
+  $SYSTEMCTL start flipblog, \\
+  $SYSTEMCTL stop flipblog, \\
+  $SYSTEMCTL restart flipblog, \\
+  $NODE /tmp/flipblog-db-rollback-check.mjs, \\
+  /usr/bin/tee /etc/flipblog/app.env, \\
+  /usr/bin/chown, \\
+  /usr/bin/chmod
+EOF
+sudo chmod 0440 /etc/sudoers.d/flipblog-deploy
+sudo visudo -c   # must print "parsed OK" — do not leave a broken sudoers
+```
+
+Notes:
+
+- If `/etc/sudoers.d/flipblog-deploy` already exists from an earlier setup,
+  **replace** it rather than appending: sudoers honors the *first* matching rule,
+  so a stale line that predates this file (or lists only `restart`) would shadow
+  the new one and break `systemctl start` during rollback. Verify with
+  `sudo -l -U deploy` after applying.
+- The scripts scp `server/scripts/db-rollback-check.mjs` to exactly
+  `/tmp/flipblog-db-rollback-check.mjs` before running the gate, which is why the
+  `node` rule is scoped to that path.
+- The `start`/`stop`/`restart` entries are all required: the rollback path runs
+  `sudo systemctl stop flipblog` **before** restoring a pre-migration backup
+  (never replace the DB while a process holds it open) and starts the unit again
+  afterwards.
+- `chown`/`chmod`/`tee` are pre-existing requirements of `deploy.sh`
+  (app.env write + handing the restored DB back to `flipblog:flipblog`).
 
 ## Install (Debian/Ubuntu, as root)
 
