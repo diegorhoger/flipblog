@@ -1,0 +1,113 @@
+name: Promote to production
+# Issue #35: a verified version is promoted from the release pipeline to
+# production. Triggered manually (workflow_dispatch) and gated by the
+# `production` GitHub environment: enable "Required reviewers" on it so
+# promotion waits for explicit human approval before any deploy step runs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Production release tag to promote, e.g. v1.2.0 (must exist and have green CI).'
+        required: true
+
+# Do not cancel an in-flight production deploy; queue a second promotion behind
+# it so two deploys can never race over `current` and systemd.
+concurrency:
+  group: deploy-production-env
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  checks: read
+
+jobs:
+  gate:
+    name: Gate on required CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version }}
+      - name: Verify the tag exists and wait for required CI checks at this commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          REQUIRED_CHECKS: test,e2e,release
+          DEPLOY_VERSION: ${{ inputs.version }}
+        run: |
+          if ! git rev-parse "$DEPLOY_VERSION" >/dev/null 2>&1; then
+            echo "::error::tag '$DEPLOY_VERSION' does not exist"
+            exit 1
+          fi
+          # Derive the SHA from the checkout (not ${github.sha}, which on
+          # workflow_dispatch points at the default-branch head, not the tag
+          # commit we actually checked out and will build/deploy).
+          export CI_SHA="$(git rev-parse HEAD)"
+          bash scripts/ci-gate.sh
+
+  promote:
+    name: Promote to production host
+    needs: gate
+    runs-on: ubuntu-latest
+    # EXPLICIT APPROVAL GATE: this environment must have "Required reviewers"
+    # configured, so the job waits for approval before running. The release
+    # version came in via workflow_dispatch and passed the CI gate above.
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      APP_ENV_CONTENT: ${{ secrets.PROD_APP_ENV }}
+      PROD_BASE_URL: ${{ vars.PROD_BASE_URL }}
+      SMOKE_ADMIN_USER: ${{ secrets.PROD_ADMIN_USER }}
+      SMOKE_ADMIN_PASSWORD: ${{ secrets.PROD_ADMIN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Write SSH key
+        shell: bash
+        env:
+          KEY: ${{ secrets.PROD_SSH_KEY }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          echo "SSH_KEY_PATH=$HOME/.ssh/id_ed25519" >> "$GITHUB_ENV"
+
+      - name: Build the exact tag and record its provenance
+        shell: bash
+        env:
+          DEPLOY_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="$DEPLOY_VERSION"
+          VERSION="${TAG#v}"
+          npm ci
+          npm run release:build -- --tag "$TAG"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "RELEASE_DIR=dist/releases/$VERSION" >> "$GITHUB_ENV"
+          cat "dist/releases/$VERSION/COMMIT" "dist/releases/$VERSION/VERSION"
+
+      - name: Pre-deploy artifact smoke (local)
+        shell: bash
+        run: node scripts/release-smoke.mjs --release "$RELEASE_DIR"
+
+      - name: Promote to production host (readiness-gated, auto-rollback)
+        shell: bash
+        run: bash scripts/deploy.sh
+
+      - name: Post-deploy smoke (health, login, publish, reader, uploads)
+        shell: bash
+        run: |
+          node scripts/post-deploy-smoke.mjs \
+            --base-url "$PROD_BASE_URL" \
+            --username "$SMOKE_ADMIN_USER" \
+            --password "$SMOKE_ADMIN_PASSWORD"

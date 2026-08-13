@@ -198,6 +198,21 @@ so the process itself can't be tampered with by the service user. Secrets are
   and `docs/release-process.md` documents triggers (>5 min unhealthy, error rate
   >5% for 5 min, critical flow broken).
 
+### 3.8.1 Staging environment & release pipeline (Issue #35)
+
+- **Staging is production-like**: the same systemd unit, Caddy reverse proxy,
+  persistent SQLite/uploads paths, and `/etc/flipblog/app.env` (mode 0600)
+  secrets wiring, on its own host/domain. The only differences are the hostname
+  and the env file contents (staging secrets/URLs).
+- **Pipeline**: GitHub Actions drives every deploy.
+  - [`deploy-staging.yml`](../.github/workflows/deploy-staging.yml) deploys every
+    `main` push (and accepts a manual `workflow_dispatch` version/tag).
+  - [`promote-production.yml`](../.github/workflows/promote-production.yml)
+    promotes a `vX.Y.Z` tag to production only after explicit approval (the
+    `production` GitHub environment with required reviewers).
+  - [`rollback-*.yml`](../.github/workflows/) restore a previously-installed
+    release
+
 ### 3.9 Health & monitoring
 
 - **Liveness**: `GET /api/health/live` — 200, no DB touch.
@@ -296,12 +311,15 @@ This is a paper decision now; revisit when one of the triggers above is real.
   `503 shutting_down` while draining). Reference artifacts live in
   [`deploy/`](../deploy/README.md).
 - **#35** Create staging deployment and production release pipeline using the
-  symlink/`current` + tag approach.
+  symlink/`current` + tag approach — workflows in
+  [`.github/workflows/`](../.github/workflows/) (`deploy-staging.yml`,
+  `promote-production.yml`, `rollback-*.yml`), §3.8.1, and the setup guide in
+  [`deploy/README.md`](../deploy/README.md).
 - **#36** Add production monitoring, alerts, incidents, runbooks reading
   `/api/health/live` + `/api/health/ready`.
 - The launch architecture must satisfy the mandates in `SECURITY.md` (Secure
   cookies, TRUST_PROXY, bounded trust) — this doc encodes them.
 
 ---
-_Last updated: 2026-08-06_
+_Last updated: 2026-08-12_
 _Status: SELECTED — reference for #34/#35/#36_

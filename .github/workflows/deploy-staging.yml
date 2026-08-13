@@ -1,0 +1,117 @@
+name: Deploy to staging
+# Issue #35: every release candidate deploys to the production-like staging
+# environment. Runs on every push to `main` (each merged candidate) and can be
+# triggered manually to re-deploy any version/tag.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version/tag to deploy (e.g. v1.2.0-rc.1). Leave empty to deploy the default-branch release.'
+        required: false
+
+# Queue staging deploys rather than cancel-in-progress. A deploy mutates the
+# host (extract + symlink + restart) and cancelling mid-flight could leave the
+# host in a half-mutated state. New deploys run after the current one ends.
+concurrency:
+  group: deploy-staging-env
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  checks: read
+
+jobs:
+  gate:
+    name: Gate on required CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version || github.ref }}
+      - name: Wait until required CI checks succeed at this commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          REQUIRED_CHECKS: test,e2e,release
+          DEPLOY_VERSION: ${{ inputs.version }}
+        run: |
+          # Derive the SHA from the checkout (not ${github.sha}, which on
+          # workflow_dispatch with a ref points at the default-branch head,
+          # not the ref we actually checked out and will build/deploy).
+          export CI_SHA="$(git rev-parse HEAD)"
+          bash scripts/ci-gate.sh
+
+  deploy:
+    name: Deploy to staging host
+    needs: gate
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      APP_ENV_CONTENT: ${{ secrets.STAGING_APP_ENV }}
+      STAGING_BASE_URL: ${{ vars.STAGING_BASE_URL }}
+      SMOKE_ADMIN_USER: ${{ secrets.STAGING_ADMIN_USER }}
+      SMOKE_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Write SSH key
+        shell: bash
+        env:
+          KEY: ${{ secrets.STAGING_SSH_KEY }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          echo "SSH_KEY_PATH=$HOME/.ssh/id_ed25519" >> "$GITHUB_ENV"
+
+      # The release ID is the short commit SHA for push-to-main and the tag
+      # value (sans v) for workflow_dispatch. Every push gets its own directory
+      # so the previous staging build remains a valid rollback target.
+      - name: Build release artifact
+        shell: bash
+        env:
+          DEPLOY_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          npm ci
+          if [ -n "$DEPLOY_VERSION" ]; then
+            TAG="$DEPLOY_VERSION"
+            npm run release:build -- --tag "$TAG"
+            VERSION="${TAG#v}"
+          else
+            VERSION=$(git rev-parse --short=12 HEAD)
+            npm run release:build -- --version "$VERSION"
+          fi
+          RELEASE_DIR="dist/releases/$VERSION"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "RELEASE_DIR=$RELEASE_DIR" >> "$GITHUB_ENV"
+          echo "built release: $RELEASE_DIR"
+
+      - name: Pre-deploy artifact smoke (local)
+        shell: bash
+        run: node scripts/release-smoke.mjs --release "$RELEASE_DIR"
+
+      - name: Deploy to staging host (readiness-gated, auto-rollback)
+        shell: bash
+        run: bash scripts/deploy.sh
+
+      - name: Post-deploy smoke (health, login, publish, reader, uploads)
+        shell: bash
+        run: |
+          node scripts/post-deploy-smoke.mjs \
+            --base-url "$STAGING_BASE_URL" \
+            --username "$SMOKE_ADMIN_USER" \
+            --password "$SMOKE_ADMIN_PASSWORD"

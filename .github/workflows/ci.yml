@@ -3,6 +3,9 @@ name: CI
 on:
   push:
     branches: [main, 'feature/**']
+    # Release/hotfix/RC tags must run CI too, or the production promotion gate
+    # (ci-gate.sh) would have no check-runs to wait for at the tag's commit.
+    tags: ['v*']
   pull_request:
 
 concurrency:

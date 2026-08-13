@@ -17,10 +17,12 @@
 // working unchanged.
 //
 // Usage:
-//   node scripts/build-release.mjs [--tag v1.2.0] [--out dist/releases/v1.2.0] [--allow-dirty]
+//   node scripts/build-release.mjs [--tag v1.2.0] [--version 8ede71b5a6b7] [--out dir] [--allow-dirty]
 //
-// Default output: dist/releases/<version> where version comes from --tag
-// (minus the leading v) or, when --tag is absent, from the root package.json.
+// Default output: dist/releases/<version> where version is:
+//   - the value passed to --version (highest precedence; unique-per-commit IDs),
+//   - else the --tag value minus a leading 'v',
+//   - else the root package.json's version.
 
 import { execSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -49,9 +51,10 @@ function fail(msg) {
 }
 
 function parseArgs(argv) {
-  const out = { tag: null, out: null, allowDirty: false };
+  const out = { tag: null, version: null, out: null, allowDirty: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--tag') out.tag = argv[++i];
+    else if (argv[i] === '--version') out.version = argv[++i];
     else if (argv[i] === '--out') out.out = argv[++i];
     else if (argv[i] === '--allow-dirty') out.allowDirty = true;
     else fail(`unknown argument: ${argv[i]}`);
@@ -96,7 +99,10 @@ if (args.tag) {
   }
 }
 const rootPkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
-const version = args.tag ? args.tag.replace(/^v/, '') : rootPkg.version;
+// --version takes precedence over --tag and package.json so the pipeline can
+// pass an immutable, unique-per-commit identifier (e.g. the short SHA) and a
+// re-deploy of the same SHA never lands in a different artifact directory.
+const version = args.version || (args.tag ? args.tag.replace(/^v/, '') : rootPkg.version);
 const outDir = resolve(args.out || join(ROOT, 'dist', 'releases', version));
 
 console.log(`Release build for ${version} @ ${commit.slice(0, 12)} -> ${outDir}`);

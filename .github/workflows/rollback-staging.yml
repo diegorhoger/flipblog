@@ -1,0 +1,52 @@
+name: Roll back staging
+# Issue #35: restore a previous known-good version on the staging host WITHOUT
+# rebuilding — release directories persist under /srv/flipblog/releases after
+# each deploy, so this is a symlink flip + restart (scripts/rollback.sh).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Target release directory name to restore, e.g. 1.2.0 or 1.2.0-rc.1 (must already exist on the host).'
+        required: true
+
+concurrency:
+  group: deploy-staging-env
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write SSH key
+        shell: bash
+        env:
+          KEY: ${{ secrets.STAGING_SSH_KEY }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          echo "SSH_KEY_PATH=$HOME/.ssh/id_ed25519" >> "$GITHUB_ENV"
+      - name: Restore previous release
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: bash scripts/rollback.sh
+      - name: Post-rollback smoke
+        shell: bash
+        env:
+          SMOKE_ADMIN_USER: ${{ secrets.STAGING_ADMIN_USER }}
+          SMOKE_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
+        run: |
+          node scripts/post-deploy-smoke.mjs \
+            --base-url "${{ vars.STAGING_BASE_URL }}" \
+            --username "$SMOKE_ADMIN_USER" \
+            --password "$SMOKE_ADMIN_PASSWORD"
