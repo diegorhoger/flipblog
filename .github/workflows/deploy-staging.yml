@@ -35,9 +35,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          CI_SHA: ${{ github.sha }}
           REQUIRED_CHECKS: test,e2e,release
-        run: bash scripts/ci-gate.sh
+        run: |
+          # Derive the SHA from the checkout (not ${github.sha}, which on
+          # workflow_dispatch with a ref points at the default-branch head,
+          # not the ref we actually checked out and will build/deploy).
+          CI_SHA="$(git rev-parse HEAD)"
+          bash scripts/ci-gate.sh
 
   deploy:
     name: Deploy to staging host

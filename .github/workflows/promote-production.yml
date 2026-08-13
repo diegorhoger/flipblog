@@ -33,7 +33,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          CI_SHA: ${{ github.sha }}
           REQUIRED_CHECKS: test,e2e,release
         run: |
           TAG="${{ inputs.version }}"
@@ -41,6 +40,10 @@ jobs:
             echo "::error::tag '$TAG' does not exist"
             exit 1
           fi
+          # Derive the SHA from the checkout (not ${github.sha}, which on
+          # workflow_dispatch points at the default-branch head, not the tag
+          # commit we actually checked out and will build/deploy).
+          CI_SHA="$(git rev-parse HEAD)"
           bash scripts/ci-gate.sh
 
   promote:
@@ -88,7 +91,7 @@ jobs:
           npm run release:build -- --tag "$TAG"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "RELEASE_DIR=dist/releases/$VERSION" >> "$GITHUB_ENV"
-          cat "$RELEASE_DIR/COMMIT" "$RELEASE_DIR/VERSION"
+          cat "dist/releases/$VERSION/COMMIT" "dist/releases/$VERSION/VERSION"
 
       - name: Pre-deploy artifact smoke (local)
         shell: bash
